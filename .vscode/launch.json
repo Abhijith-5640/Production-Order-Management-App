@@ -1,0 +1,44 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": ".NET API (Debug)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-api",
+      "program": "${workspaceFolder}/src/NexusProd.Api/bin/Debug/net8.0/win-x64/NexusProd.Api.dll",
+      "cwd": "${workspaceFolder}/src/NexusProd.Api/bin/Debug/net8.0/win-x64",
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_URLS": "http://127.0.0.1:5099"
+      },
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "Vite Dev Server",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "client", "run", "dev", "--", "--host"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Debug Client (Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/client/src"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full Stack (API + Vite)",
+      "configurations": [".NET API (Debug)", "Vite Dev Server"]
+    },
+    {
+      "name": "Full Stack (API + Chrome)",
+      "configurations": [".NET API (Debug)", "Debug Client (Chrome)"]
+    }
+  ]
+}

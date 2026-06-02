@@ -78,8 +78,19 @@ const Dashboard = () => {
         }
     };
 
-    const handleLogout = () => {
+    const handleLogout = async () => {
+        try {
+            await api.logout();
+        } catch (error) {
+            // Even if the server call fails, clear local session so the user
+            // is not stuck on the dashboard with a stale token.
+            console.warn('Logout request failed; clearing local session anyway.', error);
+        }
+        localStorage.removeItem('nexus_token');
+        localStorage.removeItem('nexus_token_expires');
         localStorage.removeItem('nexus_authenticated');
+        localStorage.removeItem('nexus_user');
+        localStorage.removeItem('nexus_user_id');
         navigate('/login');
     };
 
@@ -141,7 +152,9 @@ const Dashboard = () => {
         setLoading({ state: true, text: 'Updating Trip Invoice...' });
         try {
             const { item } = detailModal;
-            const result = await api.updateInvoice(item.id, currentTrip, item.distribution);
+            // Project DistributionDto ({ branch, trip, qty }) -> UpdateOrderDistributionDto ({ branch, qty })
+            const newDistribution = item.distribution.map(d => ({ branch: d.branch, qty: d.qty }));
+            const result = await api.updateInvoice(item.id, currentTrip, newDistribution);
             if (result.success) {
                 toast.success(`Invoices updated for ${currentTrip}`);
                 setDetailModal({ isOpen: false, item: null });

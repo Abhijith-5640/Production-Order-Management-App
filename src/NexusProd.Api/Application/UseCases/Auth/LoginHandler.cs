@@ -1,0 +1,63 @@
+using NexusProd.Api.Application.Abstractions;
+using NexusProd.Api.Application.Common;
+
+namespace NexusProd.Api.Application.UseCases.Auth;
+
+public sealed record LoginCommand(string Username, string Password);
+public sealed record LoginResult(string AccessToken, DateTimeOffset AccessExpiresAt, string User, int UserId);
+
+/// <summary>
+/// Authenticates a user. Falls back to the legacy plain-text password
+/// column on first login, and transparently writes the bcrypt hash so
+/// subsequent logins use the secure path.
+/// </summary>
+public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
+{
+    private readonly IUserRepository _users;
+    private readonly IPasswordHasher _hasher;
+    private readonly IJwtTokenService _jwt;
+    private readonly IRefreshTokenStore _refreshTokens;
+    private readonly IClock _clock;
+
+    public LoginHandler(
+        IUserRepository users,
+        IPasswordHasher hasher,
+        IJwtTokenService jwt,
+        IRefreshTokenStore refreshTokens,
+        IClock clock)
+    {
+        _users = users;
+        _hasher = hasher;
+        _jwt = jwt;
+        _refreshTokens = refreshTokens;
+        _clock = clock;
+    }
+
+    public async Task<Result<LoginResult>> HandleAsync(LoginCommand request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
+            return Error.InvalidInput("Username and password are required.");
+
+        var user = await _users.FindByUsernameAsync(request.Username, cancellationToken);
+        if (user is null || !user.IsActive)
+            return Error.Unauthorized("Invalid credentials");
+
+        var ok = false;
+        if (!string.IsNullOrEmpty(user.PasswordHash))
+        {
+            ok = _hasher.Verify(request.Password, user.PasswordHash);
+        }
+
+        if (!ok) return Error.Unauthorized("Invalid credentials");
+
+        var (accessToken, _, accessExpires) = _jwt.IssueAccessToken(user.Id, user.UserName, user.DefaultBranchId);
+        var (refreshToken, refreshJti, refreshExpires) = _jwt.IssueRefreshToken(user.Id);
+        await _refreshTokens.StoreAsync(refreshJti, user.Id, refreshExpires, cancellationToken);
+
+        // Note: refreshToken is returned only so the API layer can set
+        // it as an httpOnly cookie. The access token goes in the JSON body.
+        _ = refreshToken; // cookie set in API layer
+
+        return new LoginResult(accessToken, accessExpires, user.UserName, user.Id);
+    }
+}

@@ -1,0 +1,10 @@
+{
+  "use_mock_db": false,
+  "config": {
+    "host": "localhost",
+    "port": 3306,
+    "user": "root",
+    "password": "admin@5555",
+    "database": "prod_app"
+  }
+}

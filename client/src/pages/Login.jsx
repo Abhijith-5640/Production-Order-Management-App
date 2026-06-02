@@ -34,10 +34,12 @@ const Login = () => {
         try {
             const result = await api.login(credentials.username, credentials.password);
 
-            if (result.success) {
+            if (result && result.accessToken) {
+                localStorage.setItem('nexus_token', result.accessToken);
+                localStorage.setItem('nexus_token_expires', result.accessExpiresAt);
                 localStorage.setItem('nexus_authenticated', 'true');
                 localStorage.setItem('nexus_user', result.user);
-                localStorage.setItem('nexus_user_id', result.userId);
+                localStorage.setItem('nexus_user_id', String(result.userId));
                 toast.success('Login Successful!');
                 setTimeout(() => {
                     setLoading({ state: false, text: '' });
@@ -45,11 +47,11 @@ const Login = () => {
                 }, 500);
             } else {
                 setLoading({ state: false, text: '' });
-                toast.error(result.message || 'Invalid credentials.');
+                toast.error(result?.message || 'Invalid credentials.');
             }
         } catch (error) {
             setLoading({ state: false, text: '' });
-            toast.error('Connection to server failed.');
+            toast.error(error?.message || 'Connection to server failed.');
         }
     };
 

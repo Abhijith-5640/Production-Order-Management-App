@@ -1,0 +1,51 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-api",
+      "command": "dotnet",
+      "type": "process",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/NexusProd.Api/NexusProd.Api.csproj",
+        "-c",
+        "Debug",
+        "/p:SkipNpmBuild=true"
+      ],
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "build-client",
+      "type": "npm",
+      "script": "build",
+      "options": { "cwd": "${workspaceFolder}/client" },
+      "problemMatcher": "$tsCompile"
+    },
+    {
+      "label": "dev-client",
+      "type": "npm",
+      "script": "dev",
+      "options": { "cwd": "${workspaceFolder}/client" },
+      
+      "problemMatcher": "$tsCompile"
+    },
+    {
+      "label": "watch-api",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "watch",
+        "run",
+        "--project",
+        "${workspaceFolder}/src/NexusProd.Api/NexusProd.Api.csproj",
+        "/p:SkipNpmBuild=true"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}

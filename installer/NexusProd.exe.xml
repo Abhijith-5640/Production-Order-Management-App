@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WinSW service definition for NexusProd.Api.
+
+  Drop this file next to NexusProd.exe (the published single-file).
+  WinSW looks for <executable>.xml automatically. Rename the package
+  executable to "NexusProd.exe" before installing.
+
+  Install:
+    NexusProd.exe install
+  Uninstall:
+    NexusProd.exe uninstall
+  Start:
+    NexusProd.exe start
+  Stop:
+    NexusProd.exe stop
+-->
+<service>
+  <id>NexusProd</id>
+  <name>NexusProd API Server</name>
+  <description>Web POS Production Order Management — local API server.</description>
+  <executable>%BASE%\NexusProd.Api.exe</executable>
+  <workingdirectory>%BASE%</workingdirectory>
+  <arguments>--urls=http://0.0.0.0:5000</arguments>
+  <onfailure action="restart" delay="5 sec"/>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <resetfailure>1 hour</resetfailure>
+  <startmode>Automatic</startmode>
+  <priority>Normal</priority>
+  <stoptimeout>15 sec</stoptimeout>
+  <stopparentprocessfirst>false</stopparentprocessfirst>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

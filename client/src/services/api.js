@@ -1,80 +1,74 @@
 // c:/Users/devda/source/repos/anti-gra/Production-Order-Management-App/client/src/services/api.js
-const API_BASE_URL = import.meta.env.DEV 
-    ? 'http://localhost:5000/api' 
-    : '/api';
+//
+// Routes here mirror the .NET endpoints declared in src/NexusProd.Api/Api/Endpoints/*.
+// Keep them in sync with the server.
+//
+// Dev base URL points at the .NET server directly on :5099 (Vite's /api proxy is also
+// wired up in vite.config.js for HMR convenience, but the explicit base works in both
+// dev and prod without relying on the proxy).
+const DEV_API_BASE_URL = 'http://localhost:5099/api';
+const API_BASE_URL = import.meta.env.DEV ? DEV_API_BASE_URL : '/api';
+
+// Read the JWT once and re-attach it to protected calls. The server's /api/orders
+// group requires the "AuthenticatedUser" policy.
+const authHeaders = () => {
+    const token = localStorage.getItem('nexus_token');
+    return token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+};
+
+const request = async (path, init = {}) => {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+        ...init,
+        headers: { ...authHeaders(), ...(init.headers || {}) },
+    });
+    // Throw on non-2xx so the caller's catch can surface the real status / message.
+    if (!response.ok) {
+        let detail = '';
+        try { detail = (await response.json())?.message || (await response.text()); } catch { /* ignore */ }
+        throw new Error(`HTTP ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ''}`);
+    }
+    return response.json();
+};
 
 export const api = {
-    login: async (username, password) => {
-        const response = await fetch(`${API_BASE_URL}/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
-        return response.json();
-    },
+    login: async (username, password) => request('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+    }),
 
-    getSections: async () => {
-        const response = await fetch(`${API_BASE_URL}/sections`);
-        return response.json();
-    },
+    logout: async () => request('/auth/logout', { method: 'POST' }),
 
-    getTrips: async (section) => {
-        const response = await fetch(`${API_BASE_URL}/trips/${encodeURIComponent(section)}`);
-        return response.json();
-    },
+    getSections: async () => request('/sections'),
 
-    getOrders: async (section, trip) => {
-        const response = await fetch(`${API_BASE_URL}/orders/${encodeURIComponent(section)}/${encodeURIComponent(trip)}`);
-        return response.json();
-    },
+    getTrips: async (section) => request(`/trips?section=${encodeURIComponent(section)}`),
 
-    updateInvoice: async (itemId, trip, newDistribution) => {
-        const response = await fetch(`${API_BASE_URL}/orders/update`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ itemId, trip, newDistribution })
-        });
-        return response.json();
-    },
+    getOrders: async (section, trip) =>
+        request(`/orders?section=${encodeURIComponent(section)}&trip=${encodeURIComponent(trip)}`),
 
-    saveConfig: async (configData) => {
-        const response = await fetch(`${API_BASE_URL}/config`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(configData)
-        });
-        return response.json();
-    },
+    updateInvoice: async (itemId, trip, newDistribution) => request('/orders/update', {
+        method: 'POST',
+        body: JSON.stringify({ itemId, trip, newDistribution }),
+    }),
 
-    testDb: async (configData) => {
-        const response = await fetch(`${API_BASE_URL}/test-db`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(configData)
-        });
-        return response.json();
-    },
+    saveConfig: async (configData) => request('/config/save', {
+        method: 'POST',
+        body: JSON.stringify(configData),
+    }),
 
-    excludeItem: async (section, itemId, currentTrip, branch = null) => {
-        const response = await fetch(`${API_BASE_URL}/orders/exclude`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ section, itemId, currentTrip, branch })
-        });
-        return response.json();
-    },
+    testDb: async (configData) => request('/config/test', {
+        method: 'POST',
+        body: JSON.stringify(configData),
+    }),
 
-    checkPendingOrders: async () => {
-        const response = await fetch(`${API_BASE_URL}/orders/check-pending`);
-        return response.json();
-    },
+    excludeItem: async (section, itemId, currentTrip, branch = null) => request('/orders/exclude', {
+        method: 'POST',
+        body: JSON.stringify({ section, itemId, currentTrip, branch }),
+    }),
 
-    generateInvoices: async (userId) => {
-        const response = await fetch(`${API_BASE_URL}/orders/generate-invoices`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId })
-        });
-        return response.json();
-    }
-}
+    checkPendingOrders: async () => request('/orders/check-pending'),
+
+    generateInvoices: async (userId) => request('/orders/generate', {
+        method: 'POST',
+        body: JSON.stringify({ userId }),
+    }),
+};
