@@ -1,7 +1,9 @@
 namespace NexusProd.Api.Api.Contracts;
 
-public sealed record SectionsResponse(IReadOnlyList<string> Sections);
-public sealed record TripsResponse(IReadOnlyList<string> Trips);
+public sealed record SectionDto(int Id, string Name);
+public sealed record SectionsResponse(int CategoryId, IReadOnlyList<SectionDto> Sections);
+public sealed record TripsM(int Id, string Trip);
+public sealed record TripsResponse(IReadOnlyList<TripsM> Trips);
 
 public sealed record HealthResponse(
     string Status,

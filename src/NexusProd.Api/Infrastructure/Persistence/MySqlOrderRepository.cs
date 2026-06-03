@@ -1,5 +1,7 @@
 using Dapper;
+using Microsoft.Extensions.Logging;
 using MySqlConnector;
+using NexusProd.Api.Api.Contracts;
 using NexusProd.Api.Application.Abstractions;
 using NexusProd.Api.Domain.Entities;
 
@@ -14,15 +16,28 @@ namespace NexusProd.Api.Infrastructure.Persistence;
 public sealed class MySqlOrderRepository : IOrderRepository
 {
     private readonly MySqlConnectionFactory _factory;
+    private readonly ILogger<MySqlOrderRepository> _logger;
 
-    public MySqlOrderRepository(MySqlConnectionFactory factory) => _factory = factory;
+    public MySqlOrderRepository(MySqlConnectionFactory factory, ILogger<MySqlOrderRepository> logger)
+    {
+        _factory = factory;
+        _logger = logger;
+    }
 
     public async Task<bool> CheckPendingOrdersAsync(CancellationToken cancellationToken)
     {
-        await using var conn = await _factory.OpenAsync(cancellationToken);
-        const string sql = "SELECT COUNT(*) FROM order_distribution WHERE inv_gen = 0";
-        var count = await conn.ExecuteScalarAsync<long>(new CommandDefinition(sql, cancellationToken: cancellationToken));
-        return count > 0;
+        try
+        {
+            await using var conn = await _factory.OpenAsync(cancellationToken);
+            const string sql = "SELECT COUNT(*) FROM order_distribution WHERE inv_gen = 0";
+            var count = await conn.ExecuteScalarAsync<long>(new CommandDefinition(sql, cancellationToken: cancellationToken));
+            return count > 0;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "CheckPendingOrdersAsync failed");
+            throw;
+        }
     }
 
     public async Task<int> GenerateInvoicesAsync(int userId, CancellationToken cancellationToken)
@@ -87,104 +102,126 @@ public sealed class MySqlOrderRepository : IOrderRepository
             await tx.CommitAsync(cancellationToken);
             return groups.Count;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "GenerateInvoicesAsync failed for userId {UserId}", userId);
             await tx.RollbackAsync(cancellationToken);
             throw;
         }
     }
 
-    public async Task<IReadOnlyList<string>> GetSectionsAsync(CancellationToken cancellationToken)
+    public async Task<SectionsLookup> GetSectionsAsync(CancellationToken cancellationToken)
     {
-        var SectionLists = new List<string>();
-
-        await using var conn = await _factory.OpenAsync(cancellationToken);
-
-        int CatId = await conn.QueryFirstAsync<int>(new CommandDefinition(
-            @"SELECT CAST(val_data AS SIGNED) AS Sel
-              FROM INV21040 
-              WHERE key_data = 'SECTION_CATEGORY_ID'
-              LIMIT 1;",
-            cancellationToken: cancellationToken
-        ));
-
-        if (CatId > 0)
+        try
         {
-            var rows = await conn.QueryAsync<string>(new CommandDefinition(
-            @"SELECT prdt_cat_val_nam AS SectionNames
-              FROM inv20005 
-              WHERE prdt_catgry_id = @CatId 
-              AND is_enable = 1",
-            cancellationToken: cancellationToken));
-            SectionLists = rows.ToList();
-        }
+            await using var conn = await _factory.OpenAsync(cancellationToken);
 
-        return SectionLists;
-    }
+            int CatId = await conn.QueryFirstAsync<int>(new CommandDefinition(
+                @"SELECT CAST(val_data AS SIGNED) AS Sel
+                  FROM INV21040
+                  WHERE key_data = 'SECTION_CATEGORY_ID'
+                  LIMIT 1;",
+                cancellationToken: cancellationToken
+            ));
 
-    public async Task<IReadOnlyList<string>> GetTripsAsync(int SecId, CancellationToken cancellationToken)
-    {
-        await using var conn = await _factory.OpenAsync(cancellationToken);
-        var rows = await conn.QueryAsync<string>(new CommandDefinition(
-            @"SELECT DISTINCT tm.trip_name
-              FROM sales_master sm
-              JOIN sales_details sd ON sm.sales_master_id = sd.sales_master_id
-              JOIN items i ON sd.item_id = i.item_id
-              JOIN sections s ON i.section_id = s.section_id
-              JOIN trip_master tm ON sm.trip_id = tm.trip_id
-              WHERE s.section_name = @SecId
-              ORDER BY tm.trip_name",
-            new { SecId }, cancellationToken: cancellationToken));
-        return rows.ToList();
-    }
-
-    public async Task<IReadOnlyList<OrderItem>> GetOrdersAsync(string sectionName, string tripName, CancellationToken cancellationToken)
-    {
-        await using var conn = await _factory.OpenAsync(cancellationToken);
-        var rows = (await conn.QueryAsync<OrderRow>(new CommandDefinition(
-            @"SELECT
-                  i.item_id        AS Id,
-                  i.item_name      AS Name,
-                  i.unit           AS Unit,
-                  sd.sales_detail_id AS SalesDetailId,
-                  sd.qty           AS Qty,
-                  bm.branch_name   AS Branch,
-                  sd.is_completed  AS IsCompleted
-              FROM items i
-              JOIN sections s ON i.section_id = s.section_id
-              JOIN sales_details sd ON i.item_id = sd.item_id
-              JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
-              JOIN branch_master bm ON sm.branch_id = bm.branch_id
-              JOIN trip_master tm ON sm.trip_id = tm.trip_id
-              WHERE s.section_name = @sectionName AND tm.trip_name = @tripName",
-            new { sectionName, tripName }, cancellationToken: cancellationToken))).ToList();
-
-        var byItem = new Dictionary<int, OrderItem>();
-        foreach (var row in rows)
-        {
-            if (!byItem.TryGetValue(row.Id, out var item))
+            var sections = new List<SectionDto>();
+            if (CatId > 0)
             {
-                item = new OrderItem
+                var rows = await conn.QueryAsync<SectionDto>(new CommandDefinition(
+                    @"SELECT prdt_cat_val_id AS Id, prdt_cat_val_nam AS Name
+                      FROM inv20005
+                      WHERE prdt_catgry_id = @CatId
+                      AND is_enable = 1",
+                    new { CatId }, cancellationToken: cancellationToken));
+                sections = rows.ToList();
+            }
+
+            return new SectionsLookup(CatId, sections);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetSectionsAsync failed");
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<TripsM>> GetTripsAsync(int SecId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var TripsList = new List<TripsM>();
+            await using var conn = await _factory.OpenAsync(cancellationToken);
+            var rows = await conn.QueryAsync<TripsM>(new CommandDefinition(
+                @"SELECT  id AS Id,
+			              trip AS Trip
+                  FROM Trip
+                  ORDER BY trip_seq ASC",
+                new { SecId }, cancellationToken: cancellationToken));
+            TripsList = rows.ToList();
+            return TripsList;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetTripsAsync failed for sectionId {SecId}", SecId);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<OrderItem>> GetOrdersAsync(int sectionId, string tripName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var conn = await _factory.OpenAsync(cancellationToken);
+            var rows = (await conn.QueryAsync<OrderRow>(new CommandDefinition(
+                @"SELECT
+                      i.item_id        AS Id,
+                      i.item_name      AS Name,
+                      i.unit           AS Unit,
+                      sd.sales_detail_id AS SalesDetailId,
+                      sd.qty           AS Qty,
+                      bm.branch_name   AS Branch,
+                      sd.is_completed  AS IsCompleted
+                  FROM items i
+                  JOIN sections s ON i.section_id = s.section_id
+                  JOIN sales_details sd ON i.item_id = sd.item_id
+                  JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
+                  JOIN branch_master bm ON sm.branch_id = bm.branch_id
+                  JOIN trip_master tm ON sm.trip_id = tm.trip_id
+                  WHERE s.section_id = @sectionId AND tm.trip_name = @tripName",
+                new { sectionId, tripName }, cancellationToken: cancellationToken))).ToList();
+
+            var byItem = new Dictionary<int, OrderItem>();
+            foreach (var row in rows)
+            {
+                if (!byItem.TryGetValue(row.Id, out var item))
                 {
-                    Id = row.Id,
-                    Name = row.Name,
-                    Unit = row.Unit,
-                    IsCompleted = true,
-                    Distribution = new List<DistributionEntry>()
-                };
+                    item = new OrderItem
+                    {
+                        Id = row.Id,
+                        Name = row.Name,
+                        Unit = row.Unit,
+                        IsCompleted = true,
+                        Distribution = new List<DistributionEntry>()
+                    };
+                    byItem[row.Id] = item;
+                }
+                item.Distribution.Add(new DistributionEntry
+                {
+                    Branch = row.Branch,
+                    Trip = tripName,
+                    Qty = Convert.ToInt32(row.Qty)
+                });
+                if (!ToBool(row.IsCompleted)) item = item with { IsCompleted = false };
                 byItem[row.Id] = item;
             }
-            item.Distribution.Add(new DistributionEntry
-            {
-                Branch = row.Branch,
-                Trip = tripName,
-                Qty = Convert.ToInt32(row.Qty)
-            });
-            if (!ToBool(row.IsCompleted)) item = item with { IsCompleted = false };
-            byItem[row.Id] = item;
-        }
 
-        return byItem.Values.OrderBy(x => x.IsCompleted).ToList();
+            return byItem.Values.OrderBy(x => x.IsCompleted).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetOrdersAsync failed for sectionId {SectionId} trip {Trip}", sectionId, tripName);
+            throw;
+        }
     }
 
     public async Task UpdateInvoiceAsync(int itemId, string tripName, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken)
@@ -228,14 +265,15 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
             await tx.CommitAsync(cancellationToken);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "UpdateInvoiceAsync failed for itemId {ItemId} trip {Trip}", itemId, tripName);
             await tx.RollbackAsync(cancellationToken);
             throw;
         }
     }
 
-    public async Task<string> ExcludeItemAsync(string sectionName, int itemId, string currentTripName, string? branchName, CancellationToken cancellationToken)
+    public async Task<string> ExcludeItemAsync(int sectionId, int itemId, string currentTripName, string? branchName, CancellationToken cancellationToken)
     {
         await using var conn = await _factory.OpenAsync(cancellationToken);
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
@@ -253,14 +291,16 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         FROM sales_details sd
                         JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
                         JOIN trip_master tm ON sm.trip_id = tm.trip_id
-                        WHERE sd.item_id = @itemId AND tm.trip_name = @currentTripName"
+                        JOIN items i ON sd.item_id = i.item_id
+                        WHERE sd.item_id = @itemId AND tm.trip_name = @currentTripName AND i.section_id = @sectionId"
                     : @"SELECT sd.sales_detail_id, sd.sales_master_id, sd.qty, sd.price, sm.branch_id
                         FROM sales_details sd
                         JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
                         JOIN trip_master tm ON sm.trip_id = tm.trip_id
                         JOIN branch_master bm ON sm.branch_id = bm.branch_id
-                        WHERE sd.item_id = @itemId AND tm.trip_name = @currentTripName AND bm.branch_name = @branchName",
-                new { itemId, currentTripName, branchName },
+                        JOIN items i ON sd.item_id = i.item_id
+                        WHERE sd.item_id = @itemId AND tm.trip_name = @currentTripName AND bm.branch_name = @branchName AND i.section_id = @sectionId",
+                new { itemId, currentTripName, branchName, sectionId },
                 transaction: tx, cancellationToken: cancellationToken))).ToList();
 
             if (details.Count == 0)
@@ -350,8 +390,9 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 ? $"Excluded from {currentTripName}. Item removed completely as no next trip exists."
                 : $"Excluded from {currentTripName}. Rolled over to {nextTrip!.Value.trip_name}.";
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "ExcludeItemAsync failed for sectionId {SectionId} itemId {ItemId} trip {Trip} branch {Branch}", sectionId, itemId, currentTripName, branchName);
             await tx.RollbackAsync(cancellationToken);
             throw;
         }

@@ -65,7 +65,7 @@ const Dashboard = () => {
                 toast.success(result.message || 'Invoices generated successfully!');
                 await fetchSections();
                 if (currentSection) {
-                    const { trips } = await api.getTrips(currentSection);
+                    const { trips } = await api.getTrips(currentSection.id);
                     setTrips(trips || []);
                 }
             } else {
@@ -102,7 +102,7 @@ const Dashboard = () => {
         if (!currentSection) return;
         setLoading({ state: true, text: 'Loading Trips...' });
         try {
-            const { trips } = await api.getTrips(currentSection);
+            const { trips } = await api.getTrips(currentSection.id);
             setTrips(trips || []);
             setPickerConfig({ isOpen: true, type: 'trip' });
         } catch (error) {
@@ -127,7 +127,7 @@ const Dashboard = () => {
     const loadOrders = async (section, trip) => {
         setLoading({ state: true, text: 'Loading Order List...' });
         try {
-            const { orders } = await api.getOrders(section, trip);
+            const { orders } = await api.getOrders(section.id, trip.trip);
             console.log(orders);
             setOrderData(orders || []);
         } catch (error) {
@@ -154,9 +154,9 @@ const Dashboard = () => {
             const { item } = detailModal;
             // Project DistributionDto ({ branch, trip, qty }) -> UpdateOrderDistributionDto ({ branch, qty })
             const newDistribution = item.distribution.map(d => ({ branch: d.branch, qty: d.qty }));
-            const result = await api.updateInvoice(item.id, currentTrip, newDistribution);
+            const result = await api.updateInvoice(item.id, currentTrip.trip, newDistribution);
             if (result.success) {
-                toast.success(`Invoices updated for ${currentTrip}`);
+                toast.success(`Invoices updated for ${currentTrip.trip}`);
                 setDetailModal({ isOpen: false, item: null });
                 // Reload order list to get refreshed completed states
                 await loadOrders(currentSection, currentTrip);
@@ -174,7 +174,7 @@ const Dashboard = () => {
         setExcludeConfirm({ isOpen: false, itemId: null, branch: null, itemName: '', branchName: '' });
         setLoading({ state: true, text: 'Excluding Item...' });
         try {
-            const result = await api.excludeItem(currentSection, itemId, currentTrip, branch);
+            const result = await api.excludeItem(currentSection.id, itemId, currentTrip.trip, branch);
             if (result.success) {
                 toast.success(result.message);
                 if (detailModal.isOpen) {
@@ -269,7 +269,7 @@ const Dashboard = () => {
                     <div>
                         <h1 className="font-bold text-base leading-tight">Nexus Prod</h1>
                         <p className="text-[9px] text-indigo-600 font-bold uppercase tracking-widest">
-                            {currentSection || 'Active Section'}
+                            {currentSection?.name || 'Active Section'}
                         </p>
                     </div>
                 </div>
@@ -290,7 +290,7 @@ const Dashboard = () => {
                             <div className="text-purple-600"><Layers className="w-5 h-5" /></div>
                             <div>
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Step 1</p>
-                                <p className="font-bold text-slate-700 leading-tight">{currentSection || 'Select Section'}</p>
+                                <p className="font-bold text-slate-700 leading-tight">{currentSection?.name || 'Select Section'}</p>
                             </div>
                         </div>
                         <ChevronDown className="text-slate-300 w-4 h-4" />
@@ -304,7 +304,7 @@ const Dashboard = () => {
                             <div className="text-emerald-600"><Truck className="w-5 h-5" /></div>
                             <div>
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Step 2</p>
-                                <p className="font-bold text-slate-700 leading-tight">{currentTrip || 'Select Trip'}</p>
+                                <p className="font-bold text-slate-700 leading-tight">{currentTrip?.trip || 'Select Trip'}</p>
                             </div>
                         </div>
                         <ChevronDown className="text-slate-300 w-4 h-4" />
@@ -329,7 +329,7 @@ const Dashboard = () => {
                         <div className="flex justify-between items-center px-2">
                             <h2 className="font-black text-slate-800 tracking-tight">Orders</h2>
                             <div className="bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">
-                                {currentTrip}
+                                {currentTrip.trip}
                             </div>
                         </div>
 

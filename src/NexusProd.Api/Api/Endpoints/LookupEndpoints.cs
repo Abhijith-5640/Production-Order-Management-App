@@ -14,7 +14,7 @@ public static class LookupEndpoints
         app.MapGet("/api/sections", async (IHandler<GetSectionsQuery, GetSectionsResult> h, CancellationToken ct) =>
         {
             var r = await h.HandleAsync(new GetSectionsQuery(), ct);
-            return r.ToHttp(o => Results.Ok(new SectionsResponse(o.Sections)));
+            return r.ToHttp(o => Results.Ok(new SectionsResponse(o.CategoryId, o.Sections)));
         }).AllowAnonymous();
 
         app.MapGet("/api/trips", async (int section, IHandler<GetTripsQuery, GetTripsResult> h, CancellationToken ct) =>

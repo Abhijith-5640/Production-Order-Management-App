@@ -40,10 +40,10 @@ export const api = {
 
     getSections: async () => request('/sections'),
 
-    getTrips: async (section) => request(`/trips?section=${encodeURIComponent(section)}`),
+    getTrips: async (sectionId) => request(`/trips?section=${encodeURIComponent(sectionId)}`),
 
-    getOrders: async (section, trip) =>
-        request(`/orders?section=${encodeURIComponent(section)}&trip=${encodeURIComponent(trip)}`),
+    getOrders: async (sectionId, trip) =>
+        request(`/orders?section=${encodeURIComponent(sectionId)}&trip=${encodeURIComponent(trip)}`),
 
     updateInvoice: async (itemId, trip, newDistribution) => request('/orders/update', {
         method: 'POST',
@@ -60,9 +60,9 @@ export const api = {
         body: JSON.stringify(configData),
     }),
 
-    excludeItem: async (section, itemId, currentTrip, branch = null) => request('/orders/exclude', {
+    excludeItem: async (sectionId, itemId, currentTrip, branch = null) => request('/orders/exclude', {
         method: 'POST',
-        body: JSON.stringify({ section, itemId, currentTrip, branch }),
+        body: JSON.stringify({ sectionId, itemId, currentTrip, branch }),
     }),
 
     checkPendingOrders: async () => request('/orders/check-pending'),

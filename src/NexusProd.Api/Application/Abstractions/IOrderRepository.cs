@@ -1,6 +1,9 @@
+using NexusProd.Api.Api.Contracts;
 using NexusProd.Api.Domain.Entities;
 
 namespace NexusProd.Api.Application.Abstractions;
+
+public sealed record SectionsLookup(int CategoryId, IReadOnlyList<SectionDto> Sections);
 
 /// <summary>
 /// Repository abstraction for orders. All methods are 1:1 ports of the
@@ -21,14 +24,14 @@ public interface IOrderRepository
     /// </summary>
     Task<int> GenerateInvoicesAsync(int userId, CancellationToken cancellationToken);
 
-    /// <summary>SELECT section_name FROM sections WHERE is_active = 1</summary>
-    Task<IReadOnlyList<string>> GetSectionsAsync(CancellationToken cancellationToken);
+    /// <summary>SELECT prdt_cat_val_id, prdt_cat_val_nam FROM inv20005 for the configured category</summary>
+    Task<SectionsLookup> GetSectionsAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Distinct trip names from <c>sales_master</c> joined to items in the
     /// given section. Same query as the Express version.
     /// </summary>
-    Task<IReadOnlyList<string>> GetTripsAsync(int SecId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<TripsM>> GetTripsAsync(int SecId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Items + branch distribution for the given section/trip. The
@@ -37,7 +40,7 @@ public interface IOrderRepository
     /// <c>isCompleted</c> flag (true only when every distribution row
     /// has <c>is_completed = 1</c>).
     /// </summary>
-    Task<IReadOnlyList<OrderItem>> GetOrdersAsync(string sectionName, string tripName, CancellationToken cancellationToken);
+    Task<IReadOnlyList<OrderItem>> GetOrdersAsync(int sectionId, string tripName, CancellationToken cancellationToken);
 
     /// <summary>
     /// Updates <c>qty</c>, <c>total</c>, and sets <c>is_completed = 1</c>
@@ -55,5 +58,5 @@ public interface IOrderRepository
     /// the Express API returns ("Excluded ... Rolled over to ...").
     /// Transactional.
     /// </summary>
-    Task<string> ExcludeItemAsync(string sectionName, int itemId, string currentTripName, string? branchName, CancellationToken cancellationToken);
+    Task<string> ExcludeItemAsync(int sectionId, int itemId, string currentTripName, string? branchName, CancellationToken cancellationToken);
 }

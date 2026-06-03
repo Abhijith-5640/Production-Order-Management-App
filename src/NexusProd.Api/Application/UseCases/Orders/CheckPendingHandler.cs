@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using NexusProd.Api.Application.Abstractions;
 using NexusProd.Api.Application.Common;
 
@@ -9,12 +10,25 @@ public sealed record CheckPendingResult(bool PendingExist);
 public sealed class CheckPendingHandler : IHandler<CheckPendingQuery, CheckPendingResult>
 {
     private readonly IOrderRepository _orders;
+    private readonly ILogger<CheckPendingHandler> _logger;
 
-    public CheckPendingHandler(IOrderRepository orders) => _orders = orders;
+    public CheckPendingHandler(IOrderRepository orders, ILogger<CheckPendingHandler> logger)
+    {
+        _orders = orders;
+        _logger = logger;
+    }
 
     public async Task<Result<CheckPendingResult>> HandleAsync(CheckPendingQuery request, CancellationToken cancellationToken)
     {
-        var pending = await _orders.CheckPendingOrdersAsync(cancellationToken);
-        return new CheckPendingResult(pending);
+        try
+        {
+            var pending = await _orders.CheckPendingOrdersAsync(cancellationToken);
+            return new CheckPendingResult(pending);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "CheckPending failed");
+            return Error.DatabaseError(ex.Message);
+        }
     }
 }

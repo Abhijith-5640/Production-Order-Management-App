@@ -1,5 +1,7 @@
+using Microsoft.Extensions.Logging;
 using NexusProd.Api.Application.Abstractions;
 using NexusProd.Api.Application.Common;
+using NexusProd.Api.Domain.Entities;
 
 namespace NexusProd.Api.Application.UseCases.Auth;
 
@@ -18,19 +20,22 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
     private readonly IJwtTokenService _jwt;
     private readonly IRefreshTokenStore _refreshTokens;
     private readonly IClock _clock;
+    private readonly ILogger<LoginHandler> _logger;
 
     public LoginHandler(
         IUserRepository users,
         IPasswordHasher hasher,
         IJwtTokenService jwt,
         IRefreshTokenStore refreshTokens,
-        IClock clock)
+        IClock clock,
+        ILogger<LoginHandler> logger)
     {
         _users = users;
         _hasher = hasher;
         _jwt = jwt;
         _refreshTokens = refreshTokens;
         _clock = clock;
+        _logger = logger;
     }
 
     public async Task<Result<LoginResult>> HandleAsync(LoginCommand request, CancellationToken cancellationToken)
@@ -38,7 +43,16 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
         if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
             return Error.InvalidInput("Username and password are required.");
 
-        var user = await _users.FindByUsernameAsync(request.Username, cancellationToken);
+        User? user;
+        try
+        {
+            user = await _users.FindByUsernameAsync(request.Username, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Login failed during user lookup for username {Username}", request.Username);
+            return Error.DatabaseError(ex.Message);
+        }
         if (user is null || !user.IsActive)
             return Error.Unauthorized("Invalid credentials");
 
@@ -52,7 +66,16 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
 
         var (accessToken, _, accessExpires) = _jwt.IssueAccessToken(user.Id, user.UserName, user.DefaultBranchId);
         var (refreshToken, refreshJti, refreshExpires) = _jwt.IssueRefreshToken(user.Id);
-        await _refreshTokens.StoreAsync(refreshJti, user.Id, refreshExpires, cancellationToken);
+
+        try
+        {
+            await _refreshTokens.StoreAsync(refreshJti, user.Id, refreshExpires, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Login failed during refresh token store for userId {UserId}", user.Id);
+            return Error.DatabaseError(ex.Message);
+        }
 
         // Note: refreshToken is returned only so the API layer can set
         // it as an httpOnly cookie. The access token goes in the JSON body.

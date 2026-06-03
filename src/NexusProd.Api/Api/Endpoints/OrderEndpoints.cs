@@ -23,7 +23,7 @@ public static class OrderEndpoints
             return r.ToHttp(g => Results.Ok(new GenerateInvoicesResponse(true, g.Message, g.InvoiceCount)));
         });
 
-        group.MapGet("/", async (string section, string trip, IHandler<GetOrdersQuery, GetOrdersResult> h, CancellationToken ct) =>
+        group.MapGet("/", async (int section, string trip, IHandler<GetOrdersQuery, GetOrdersResult> h, CancellationToken ct) =>
         {
             var r = await h.HandleAsync(new GetOrdersQuery(section, trip), ct);
             return r.ToHttp(o => Results.Ok(new OrdersResponse(o.Orders.Select(OrderMapper.ToDto).ToList())));
@@ -40,7 +40,7 @@ public static class OrderEndpoints
 
         group.MapPost("/exclude", async (ExcludeRequest req, IHandler<ExcludeItemCommand, string> h, CancellationToken ct) =>
         {
-            var r = await h.HandleAsync(new ExcludeItemCommand(req.Section, req.ItemId, req.CurrentTrip, req.Branch), ct);
+            var r = await h.HandleAsync(new ExcludeItemCommand(req.SectionId, req.ItemId, req.CurrentTrip, req.Branch), ct);
             return r.ToHttp(msg => Results.Ok(new ExcludeResponse(true, msg)));
         });
     }

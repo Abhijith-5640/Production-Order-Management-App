@@ -39,6 +39,14 @@
     {
       "name": "Full Stack (API + Chrome)",
       "configurations": [".NET API (Debug)", "Debug Client (Chrome)"]
+    },
+    {
+      "name": "Full Stack (API + Vite + Chrome)",
+      "configurations": [
+        ".NET API (Debug)",
+        "Vite Dev Server",
+        "Debug Client (Chrome)"
+      ]
     }
   ]
 }

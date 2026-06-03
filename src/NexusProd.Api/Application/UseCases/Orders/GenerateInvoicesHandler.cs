@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using NexusProd.Api.Application.Abstractions;
 using NexusProd.Api.Application.Common;
 
@@ -9,8 +10,13 @@ public sealed record GenerateInvoicesResult(int InvoiceCount, string Message);
 public sealed class GenerateInvoicesHandler : IHandler<GenerateInvoicesCommand, GenerateInvoicesResult>
 {
     private readonly IOrderRepository _orders;
+    private readonly ILogger<GenerateInvoicesHandler> _logger;
 
-    public GenerateInvoicesHandler(IOrderRepository orders) => _orders = orders;
+    public GenerateInvoicesHandler(IOrderRepository orders, ILogger<GenerateInvoicesHandler> logger)
+    {
+        _orders = orders;
+        _logger = logger;
+    }
 
     public async Task<Result<GenerateInvoicesResult>> HandleAsync(GenerateInvoicesCommand request, CancellationToken cancellationToken)
     {
@@ -24,6 +30,7 @@ public sealed class GenerateInvoicesHandler : IHandler<GenerateInvoicesCommand, 
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "GenerateInvoices failed for userId {UserId}", request.UserId);
             return Error.DatabaseError("Invoice generation failed: " + ex.Message);
         }
     }

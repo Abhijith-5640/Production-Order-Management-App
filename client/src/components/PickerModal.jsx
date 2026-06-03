@@ -15,14 +15,15 @@ const PickerModal = ({ isOpen, onClose, type, options, activeOption, onSelect })
 
                 <div className="space-y-2 overflow-y-auto max-h-[50vh] custom-scrollbar">
                     {options.map((opt) => {
-                        const isActive = activeOption === opt;
+                        const isActive = activeOption?.id === opt.id;
+                        const display = type === 'section' ? opt.name : opt.trip;
                         return (
                             <button
-                                key={opt}
+                                key={opt.id}
                                 onClick={() => onSelect(opt)}
                                 className="w-full text-left p-5 rounded-xl border border-slate-100 hover:bg-indigo-50 font-bold flex justify-between items-center mb-1 transition-all bg-white shadow-none text-slate-700"
                             >
-                                <span className={isActive ? 'text-indigo-600' : ''}>{opt}</span>
+                                <span className={isActive ? 'text-indigo-600' : ''}>{display}</span>
                                 {isActive && <CheckCircle className="w-5 h-5 text-indigo-600" />}
                             </button>
                         )

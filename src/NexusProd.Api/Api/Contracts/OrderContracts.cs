@@ -26,7 +26,7 @@ public sealed record UpdateOrderDistributionDto(string Branch, int Qty);
 public sealed record UpdateOrderResponse(bool Success, string Message);
 
 public sealed record ExcludeRequest(
-    string Section,
+    int SectionId,
     int ItemId,
     string CurrentTrip,
     string? Branch);

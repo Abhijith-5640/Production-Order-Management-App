@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using NexusProd.Api.Application.Abstractions;
 using NexusProd.Api.Application.Common;
 using NexusProd.Api.Domain.Entities;
@@ -9,8 +10,13 @@ public sealed record UpdateInvoiceCommand(int ItemId, string Trip, IReadOnlyList
 public sealed class UpdateInvoiceHandler : IHandler<UpdateInvoiceCommand, string>
 {
     private readonly IOrderRepository _orders;
+    private readonly ILogger<UpdateInvoiceHandler> _logger;
 
-    public UpdateInvoiceHandler(IOrderRepository orders) => _orders = orders;
+    public UpdateInvoiceHandler(IOrderRepository orders, ILogger<UpdateInvoiceHandler> logger)
+    {
+        _orders = orders;
+        _logger = logger;
+    }
 
     public async Task<Result<string>> HandleAsync(UpdateInvoiceCommand request, CancellationToken cancellationToken)
     {
@@ -24,6 +30,7 @@ public sealed class UpdateInvoiceHandler : IHandler<UpdateInvoiceCommand, string
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "UpdateInvoice failed for itemId {ItemId} trip {Trip}", request.ItemId, request.Trip);
             return Error.DatabaseError("Failed to update database: " + ex.Message);
         }
     }

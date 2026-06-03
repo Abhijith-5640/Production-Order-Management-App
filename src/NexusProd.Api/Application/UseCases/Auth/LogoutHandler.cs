@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using NexusProd.Api.Application.Abstractions;
 using NexusProd.Api.Application.Common;
 
@@ -13,17 +14,32 @@ public sealed class LogoutHandler : IHandler<LogoutCommand, bool>
 {
     private readonly IRefreshTokenStore _refreshTokens;
     private readonly IAccessTokenBlacklist _accessBlacklist;
+    private readonly ILogger<LogoutHandler> _logger;
 
-    public LogoutHandler(IRefreshTokenStore refreshTokens, IAccessTokenBlacklist accessBlacklist)
+    public LogoutHandler(
+        IRefreshTokenStore refreshTokens,
+        IAccessTokenBlacklist accessBlacklist,
+        ILogger<LogoutHandler> logger)
     {
         _refreshTokens = refreshTokens;
         _accessBlacklist = accessBlacklist;
+        _logger = logger;
     }
 
     public async Task<Result<bool>> HandleAsync(LogoutCommand request, CancellationToken cancellationToken)
     {
         if (!string.IsNullOrEmpty(request.RefreshJti))
-            await _refreshTokens.RevokeAsync(request.RefreshJti, cancellationToken);
+        {
+            try
+            {
+                await _refreshTokens.RevokeAsync(request.RefreshJti, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Logout failed during refresh-token revoke for jti {Jti}", request.RefreshJti);
+                return Error.DatabaseError(ex.Message);
+            }
+        }
         if (!string.IsNullOrEmpty(request.AccessJti))
             _accessBlacklist.Revoke(request.AccessJti);
         return true;
