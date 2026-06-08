@@ -6,6 +6,7 @@ namespace NexusProd.Api.Domain.Entities;
 public sealed class DistributionEntry
 {
     public string Branch { get; init; } = string.Empty;
-    public string Trip { get; init; } = string.Empty;
-    public int Qty { get; init; }
+    public int Trip { get; init; }
+    public decimal? Qty { get; init; }
+    public int PurSaleId { get; init; }
 }

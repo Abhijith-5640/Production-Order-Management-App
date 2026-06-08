@@ -1,6 +1,6 @@
 namespace NexusProd.Api.Api.Contracts;
 
-public sealed record DistributionDto(string Branch, string Trip, int Qty);
+public sealed record DistributionDto(string Branch, int Trip, int Qty);
 
 public sealed record OrderItemDto(
     int Id,
@@ -18,7 +18,7 @@ public sealed record GenerateInvoicesResponse(bool Success, string Message, int 
 
 public sealed record UpdateOrderRequest(
     int ItemId,
-    string Trip,
+    int Trip,
     IReadOnlyList<UpdateOrderDistributionDto> NewDistribution);
 
 public sealed record UpdateOrderDistributionDto(string Branch, int Qty);
@@ -28,7 +28,7 @@ public sealed record UpdateOrderResponse(bool Success, string Message);
 public sealed record ExcludeRequest(
     int SectionId,
     int ItemId,
-    string CurrentTrip,
+    int CurrentTrip,
     string? Branch);
 
 public sealed record ExcludeResponse(bool Success, string Message);

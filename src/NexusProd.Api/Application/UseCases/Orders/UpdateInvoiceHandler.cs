@@ -5,7 +5,7 @@ using NexusProd.Api.Domain.Entities;
 
 namespace NexusProd.Api.Application.UseCases.Orders;
 
-public sealed record UpdateInvoiceCommand(int ItemId, string Trip, IReadOnlyList<DistributionEntry> NewDistribution);
+public sealed record UpdateInvoiceCommand(int ItemId, int Trip, IReadOnlyList<DistributionEntry> NewDistribution);
 
 public sealed class UpdateInvoiceHandler : IHandler<UpdateInvoiceCommand, string>
 {
@@ -20,7 +20,7 @@ public sealed class UpdateInvoiceHandler : IHandler<UpdateInvoiceCommand, string
 
     public async Task<Result<string>> HandleAsync(UpdateInvoiceCommand request, CancellationToken cancellationToken)
     {
-        if (request.ItemId <= 0 || string.IsNullOrWhiteSpace(request.Trip) || request.NewDistribution is null)
+        if (request.ItemId <= 0 || request.Trip <= 0 || request.NewDistribution is null)
             return Error.InvalidInput("itemId, trip, and newDistribution are required");
 
         try

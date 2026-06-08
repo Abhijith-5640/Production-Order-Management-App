@@ -40,7 +40,7 @@ public interface IOrderRepository
     /// <c>isCompleted</c> flag (true only when every distribution row
     /// has <c>is_completed = 1</c>).
     /// </summary>
-    Task<IReadOnlyList<OrderItem>> GetOrdersAsync(int sectionId, string tripName, CancellationToken cancellationToken);
+    Task<IReadOnlyList<OrderItem>> GetOrdersAsync(int sectionId, int tripId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Updates <c>qty</c>, <c>total</c>, and sets <c>is_completed = 1</c>
@@ -48,7 +48,7 @@ public interface IOrderRepository
     /// Recalculates <c>sales_master.total_value</c> for every affected invoice.
     /// Transactional.
     /// </summary>
-    Task UpdateInvoiceAsync(int itemId, string tripName, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken);
+    Task UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken);
 
     /// <summary>
     /// Excludes the matching <c>sales_details</c> for the current trip
@@ -58,5 +58,5 @@ public interface IOrderRepository
     /// the Express API returns ("Excluded ... Rolled over to ...").
     /// Transactional.
     /// </summary>
-    Task<string> ExcludeItemAsync(int sectionId, int itemId, string currentTripName, string? branchName, CancellationToken cancellationToken);
+    Task<string> ExcludeItemAsync(int sectionId, int itemId, int currentTripId, string? branchName, CancellationToken cancellationToken);
 }

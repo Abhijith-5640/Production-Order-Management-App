@@ -7,6 +7,8 @@ namespace NexusProd.Api.Domain.Entities;
 public sealed record OrderItem
 {
     public int Id { get; init; }
+    public int StockMastId { get; init; }
+    public decimal? TotalQty { get; init; }
     public string Name { get; init; } = string.Empty;
     public string Unit { get; init; } = string.Empty;
     public bool IsCompleted { get; init; }

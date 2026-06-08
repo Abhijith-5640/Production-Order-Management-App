@@ -167,64 +167,123 @@ public sealed class MySqlOrderRepository : IOrderRepository
         }
     }
 
-    public async Task<IReadOnlyList<OrderItem>> GetOrdersAsync(int sectionId, string tripName, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<OrderItem>> GetOrdersAsync(int sectionId, int tripId, CancellationToken cancellationToken)
     {
         try
         {
+            const string sql = @"
+        SELECT 
+            u.ItemId,
+            u.`Name`,
+            u.StockMastId,
+            SUM(u.Qty) OVER (PARTITION BY u.StockMastId) AS TotalQty,
+            u.Qty,
+            u.Branch,
+            u.BillId,
+            u.Trip
+        FROM (
+            SELECT 
+                i.itm_mast_id    AS ItemId,
+                i.itm_mast_name  AS `Name`,
+                s.stock_mast_id  AS StockMastId,
+                bsd.sales_qty    AS Qty,
+                b.brnch_nam      AS Branch,
+                bs.pur_sale_id   AS BillId,
+                bs.trip_no       AS Trip
+            FROM INV31065BS bs
+            JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
+            JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
+            JOIN INV21050 s      ON s.stock_mast_id = bsd.stock_mast_id
+            JOIN INV21010 i      ON s.itm_mast_id = i.itm_mast_id
+            JOIN CTGE1165pur b   ON bs.pur_brnch_id = b.brnch_id
+            JOIN INV21013 pc     ON pc.itm_mast_id = i.itm_mast_id
+                                AND pc.prdt_cat_id = (
+                                                        SELECT CAST(val_data AS SIGNED) 
+                                                        FROM INV21040 
+                                                        WHERE key_data = 'SECTION_CATEGORY_ID' 
+                                                        LIMIT 1
+                                                    )
+                                AND pc.is_enable = 1
+            WHERE CAST(bsm.sales_date AS DATE) = CAST(NOW() AS DATE)
+              AND IFNULL(bs.is_for_transfer, 0) = 1
+              AND bs.trip_no         = @tripId
+              AND pc.prdt_cat_val_id = @sectionId
+
+            UNION ALL
+
+            SELECT 
+                i.itm_mast_id    AS ItemId,
+                i.itm_mast_name  AS `Name`,
+                s.stock_mast_id  AS StockMastId,
+                sd.sales_qty     AS Qty,
+                b.brnch_nam      AS Branch,
+                bs.pur_sale_id   AS BillId,
+                bs.trip_no       AS Trip
+            FROM INV31065BS bs
+            JOIN INV31065 sm     ON bs.sales_mast_id = sm.sales_mast_id
+            JOIN INV31066 sd     ON sd.sales_mast_id = sm.sales_mast_id
+            JOIN INV21050 s      ON s.stock_mast_id = sd.stock_mast_id
+            JOIN INV21010 i      ON s.itm_mast_id = i.itm_mast_id
+            JOIN CTGE1165pur b   ON bs.pur_brnch_id = b.brnch_id
+            JOIN INV21013 pc     ON pc.itm_mast_id = i.itm_mast_id
+                                AND pc.prdt_cat_id = (
+                                                        SELECT CAST(val_data AS SIGNED) 
+                                                        FROM INV21040 
+                                                        WHERE key_data = 'SECTION_CATEGORY_ID' 
+                                                        LIMIT 1
+                                                    )
+                                AND pc.is_enable = 1
+            WHERE CAST(sm.sales_date AS DATE) = CAST(NOW() AS DATE)
+              AND IFNULL(bs.is_for_transfer, 0) = 0
+              AND bs.trip_no         = @tripId
+              AND pc.prdt_cat_val_id = @sectionId
+        ) u
+        ORDER BY u.`Name`, u.Branch, u.BillId";
+
+
             await using var conn = await _factory.OpenAsync(cancellationToken);
-            var rows = (await conn.QueryAsync<OrderRow>(new CommandDefinition(
-                @"SELECT
-                      i.item_id        AS Id,
-                      i.item_name      AS Name,
-                      i.unit           AS Unit,
-                      sd.sales_detail_id AS SalesDetailId,
-                      sd.qty           AS Qty,
-                      bm.branch_name   AS Branch,
-                      sd.is_completed  AS IsCompleted
-                  FROM items i
-                  JOIN sections s ON i.section_id = s.section_id
-                  JOIN sales_details sd ON i.item_id = sd.item_id
-                  JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
-                  JOIN branch_master bm ON sm.branch_id = bm.branch_id
-                  JOIN trip_master tm ON sm.trip_id = tm.trip_id
-                  WHERE s.section_id = @sectionId AND tm.trip_name = @tripName",
-                new { sectionId, tripName }, cancellationToken: cancellationToken))).ToList();
+            var rows = (await conn.QueryAsync<FlatRowItemM>(new CommandDefinition(
+                sql,
+                new { sectionId, tripId }, cancellationToken: cancellationToken))).ToList();
 
             var byItem = new Dictionary<int, OrderItem>();
             foreach (var row in rows)
             {
-                if (!byItem.TryGetValue(row.Id, out var item))
+                if (!byItem.TryGetValue(row.StockMastId, out var item))
                 {
                     item = new OrderItem
                     {
-                        Id = row.Id,
+                        Id = row.ItemId,
                         Name = row.Name,
-                        Unit = row.Unit,
+                        StockMastId = row.StockMastId,
+                        TotalQty = row.TotalQty,
+                        // Unit = row.Unit,
                         IsCompleted = true,
                         Distribution = new List<DistributionEntry>()
                     };
-                    byItem[row.Id] = item;
+                    byItem[row.StockMastId] = item;
                 }
                 item.Distribution.Add(new DistributionEntry
                 {
                     Branch = row.Branch,
-                    Trip = tripName,
-                    Qty = Convert.ToInt32(row.Qty)
+                    PurSaleId = row.PurSaleId,
+                    Trip = row.Trip,
+                    Qty = Convert.ToDecimal(row.Qty)
                 });
                 if (!ToBool(row.IsCompleted)) item = item with { IsCompleted = false };
-                byItem[row.Id] = item;
+                byItem[row.StockMastId] = item;
             }
 
             return byItem.Values.OrderBy(x => x.IsCompleted).ToList();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "GetOrdersAsync failed for sectionId {SectionId} trip {Trip}", sectionId, tripName);
+            _logger.LogError(ex, "GetOrdersAsync failed for sectionId {SectionId} trip {Trip}", sectionId, tripId);
             throw;
         }
     }
 
-    public async Task UpdateInvoiceAsync(int itemId, string tripName, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken)
+    public async Task UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken)
     {
         await using var conn = await _factory.OpenAsync(cancellationToken);
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
@@ -239,8 +298,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                       JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
                       JOIN trip_master tm ON sm.trip_id = tm.trip_id
                       JOIN branch_master bm ON sm.branch_id = bm.branch_id
-                      WHERE sd.item_id = @itemId AND tm.trip_name = @tripName AND bm.branch_name = @branch",
-                    new { itemId, tripName, dist.Branch },
+                      WHERE sd.item_id = @itemId AND tm.trip_id = @tripId AND bm.branch_name = @branch",
+                    new { itemId, tripId, dist.Branch },
                     transaction: tx, cancellationToken: cancellationToken));
 
                 if (found is null) continue;
@@ -267,13 +326,13 @@ public sealed class MySqlOrderRepository : IOrderRepository
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "UpdateInvoiceAsync failed for itemId {ItemId} trip {Trip}", itemId, tripName);
+            _logger.LogError(ex, "UpdateInvoiceAsync failed for itemId {ItemId} trip {Trip}", itemId, tripId);
             await tx.RollbackAsync(cancellationToken);
             throw;
         }
     }
 
-    public async Task<string> ExcludeItemAsync(int sectionId, int itemId, string currentTripName, string? branchName, CancellationToken cancellationToken)
+    public async Task<string> ExcludeItemAsync(int sectionId, int itemId, int currentTripId, string? branchName, CancellationToken cancellationToken)
     {
         await using var conn = await _factory.OpenAsync(cancellationToken);
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
@@ -282,7 +341,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
             var trips = (await conn.QueryAsync<(int trip_id, string trip_name)>(new CommandDefinition(
                 "SELECT trip_id, trip_name FROM trip_master WHERE is_active = 1 ORDER BY trip_id",
                 transaction: tx, cancellationToken: cancellationToken))).ToList();
-            var currentIndex = trips.FindIndex(t => t.trip_name == currentTripName);
+            var currentIndex = trips.FindIndex(t => t.trip_id == currentTripId);
             var nextTrip = currentIndex >= 0 && currentIndex < trips.Count - 1 ? trips[currentIndex + 1] : ((int trip_id, string trip_name)?)null;
 
             var details = (await conn.QueryAsync<ExcludeRow>(new CommandDefinition(
@@ -292,15 +351,15 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
                         JOIN trip_master tm ON sm.trip_id = tm.trip_id
                         JOIN items i ON sd.item_id = i.item_id
-                        WHERE sd.item_id = @itemId AND tm.trip_name = @currentTripName AND i.section_id = @sectionId"
+                        WHERE sd.item_id = @itemId AND tm.trip_id = @currentTripId AND i.section_id = @sectionId"
                     : @"SELECT sd.sales_detail_id, sd.sales_master_id, sd.qty, sd.price, sm.branch_id
                         FROM sales_details sd
                         JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
                         JOIN trip_master tm ON sm.trip_id = tm.trip_id
                         JOIN branch_master bm ON sm.branch_id = bm.branch_id
                         JOIN items i ON sd.item_id = i.item_id
-                        WHERE sd.item_id = @itemId AND tm.trip_name = @currentTripName AND bm.branch_name = @branchName AND i.section_id = @sectionId",
-                new { itemId, currentTripName, branchName, sectionId },
+                        WHERE sd.item_id = @itemId AND tm.trip_id = @currentTripId AND bm.branch_name = @branchName AND i.section_id = @sectionId",
+                new { itemId, currentTripId, branchName, sectionId },
                 transaction: tx, cancellationToken: cancellationToken))).ToList();
 
             if (details.Count == 0)
@@ -387,12 +446,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
             await tx.CommitAsync(cancellationToken);
 
             return nextTrip is null
-                ? $"Excluded from {currentTripName}. Item removed completely as no next trip exists."
-                : $"Excluded from {currentTripName}. Rolled over to {nextTrip!.Value.trip_name}.";
+                ? $"Excluded from trip {currentTripId}. Item removed completely as no next trip exists."
+                : $"Excluded from trip {currentTripId}. Rolled over to {nextTrip!.Value.trip_name}.";
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "ExcludeItemAsync failed for sectionId {SectionId} itemId {ItemId} trip {Trip} branch {Branch}", sectionId, itemId, currentTripName, branchName);
+            _logger.LogError(ex, "ExcludeItemAsync failed for sectionId {SectionId} itemId {ItemId} trip {Trip} branch {Branch}", sectionId, itemId, currentTripId, branchName);
             await tx.RollbackAsync(cancellationToken);
             throw;
         }

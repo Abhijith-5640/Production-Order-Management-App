@@ -4,7 +4,7 @@ using NexusProd.Api.Application.Common;
 
 namespace NexusProd.Api.Application.UseCases.Orders;
 
-public sealed record ExcludeItemCommand(int SectionId, int ItemId, string CurrentTrip, string? Branch);
+public sealed record ExcludeItemCommand(int SectionId, int ItemId, int CurrentTrip, string? Branch);
 
 public sealed class ExcludeItemHandler : IHandler<ExcludeItemCommand, string>
 {
@@ -19,7 +19,7 @@ public sealed class ExcludeItemHandler : IHandler<ExcludeItemCommand, string>
 
     public async Task<Result<string>> HandleAsync(ExcludeItemCommand request, CancellationToken cancellationToken)
     {
-        if (request.SectionId <= 0 || request.ItemId <= 0 || string.IsNullOrWhiteSpace(request.CurrentTrip))
+        if (request.SectionId <= 0 || request.ItemId <= 0 || request.CurrentTrip <= 0)
             return Error.InvalidInput("section, itemId, and currentTrip are required for exclusion");
 
         try

@@ -127,7 +127,7 @@ const Dashboard = () => {
     const loadOrders = async (section, trip) => {
         setLoading({ state: true, text: 'Loading Order List...' });
         try {
-            const { orders } = await api.getOrders(section.id, trip.trip);
+            const { orders } = await api.getOrders(section.id, trip.id);
             console.log(orders);
             setOrderData(orders || []);
         } catch (error) {
@@ -154,9 +154,9 @@ const Dashboard = () => {
             const { item } = detailModal;
             // Project DistributionDto ({ branch, trip, qty }) -> UpdateOrderDistributionDto ({ branch, qty })
             const newDistribution = item.distribution.map(d => ({ branch: d.branch, qty: d.qty }));
-            const result = await api.updateInvoice(item.id, currentTrip.trip, newDistribution);
+            const result = await api.updateInvoice(item.id, currentTrip.TripId, newDistribution);
             if (result.success) {
-                toast.success(`Invoices updated for ${currentTrip.trip}`);
+                toast.success(`Invoices updated for ${currentTrip.TripName}`);
                 setDetailModal({ isOpen: false, item: null });
                 // Reload order list to get refreshed completed states
                 await loadOrders(currentSection, currentTrip);
@@ -174,7 +174,7 @@ const Dashboard = () => {
         setExcludeConfirm({ isOpen: false, itemId: null, branch: null, itemName: '', branchName: '' });
         setLoading({ state: true, text: 'Excluding Item...' });
         try {
-            const result = await api.excludeItem(currentSection.id, itemId, currentTrip.trip, branch);
+            const result = await api.excludeItem(currentSection.id, itemId, currentTrip.TripId, branch);
             if (result.success) {
                 toast.success(result.message);
                 if (detailModal.isOpen) {
@@ -336,11 +336,11 @@ const Dashboard = () => {
                         <div className="space-y-2 pb-24">
                             {orderData.map((item) => {
                                 const isDone = item.isCompleted;
-                                const tripTotal = item.distribution.reduce((acc, d) => acc + d.qty, 0);
+                                const tripTotal = item.TotalQty;
 
                                 return (
                                     <div
-                                        key={item.id}
+                                        key={item.itemId}
                                         onClick={() => handleOpenDetail(item)}
                                         className={`p-4 rounded-xl transition-all duration-300 flex items-center justify-between cursor-pointer touch-active ${isDone ? "bg-emerald-50 border-emerald-100 opacity-80" : "bg-white border-slate-100 shadow-sm hover:border-indigo-200"}`}>
 

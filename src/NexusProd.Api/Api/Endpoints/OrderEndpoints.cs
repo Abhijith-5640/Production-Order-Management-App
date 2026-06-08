@@ -23,7 +23,7 @@ public static class OrderEndpoints
             return r.ToHttp(g => Results.Ok(new GenerateInvoicesResponse(true, g.Message, g.InvoiceCount)));
         });
 
-        group.MapGet("/", async (int section, string trip, IHandler<GetOrdersQuery, GetOrdersResult> h, CancellationToken ct) =>
+        group.MapGet("/", async (int section, int trip, IHandler<GetOrdersQuery, GetOrdersResult> h, CancellationToken ct) =>
         {
             var r = await h.HandleAsync(new GetOrdersQuery(section, trip), ct);
             return r.ToHttp(o => Results.Ok(new OrdersResponse(o.Orders.Select(OrderMapper.ToDto).ToList())));
