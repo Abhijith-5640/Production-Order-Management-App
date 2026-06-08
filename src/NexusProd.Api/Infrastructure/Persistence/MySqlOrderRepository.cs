@@ -179,8 +179,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
             SUM(u.Qty) OVER (PARTITION BY u.StockMastId) AS TotalQty,
             u.Qty,
             u.Branch,
-            u.BillId,
-            u.Trip
+            u.BillId AS PurSaleId,
+            u.Trip  AS TripId
         FROM (
             SELECT 
                 i.itm_mast_id    AS ItemId,
@@ -203,7 +203,6 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                                         WHERE key_data = 'SECTION_CATEGORY_ID' 
                                                         LIMIT 1
                                                     )
-                                AND pc.is_enable = 1
             WHERE CAST(bsm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 1
               AND bs.trip_no         = @tripId
@@ -232,7 +231,6 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                                         WHERE key_data = 'SECTION_CATEGORY_ID' 
                                                         LIMIT 1
                                                     )
-                                AND pc.is_enable = 1
             WHERE CAST(sm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 0
               AND bs.trip_no         = @tripId
@@ -267,10 +265,10 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 {
                     Branch = row.Branch,
                     PurSaleId = row.PurSaleId,
-                    Trip = row.Trip,
+                    Trip = row.TripId,
                     Qty = Convert.ToDecimal(row.Qty)
                 });
-                if (!ToBool(row.IsCompleted)) item = item with { IsCompleted = false };
+                // if (!ToBool(item.IsCompleted)) item = item with { IsCompleted = false };
                 byItem[row.StockMastId] = item;
             }
 

@@ -11,6 +11,5 @@ internal sealed record FlatRowItemM(
     decimal Qty,
     string Branch,
     int PurSaleId,
-    int Trip,
-    bool IsCompleted = false
+    int TripId
 );
