@@ -256,7 +256,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         StockMastId = row.StockMastId,
                         TotalQty = row.TotalQty,
                         // Unit = row.Unit,
-                        IsCompleted = true,
+                        IsCompleted = false,
                         Distribution = new List<DistributionEntry>()
                     };
                     byItem[row.StockMastId] = item;

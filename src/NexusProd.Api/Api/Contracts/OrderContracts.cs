@@ -1,9 +1,15 @@
 namespace NexusProd.Api.Api.Contracts;
 
-public sealed record DistributionDto(string Branch, int Trip, int Qty);
+public sealed record DistributionDto(
+    int PurSaleId,
+    string Branch,
+    int Trip,
+    decimal Qty);
 
 public sealed record OrderItemDto(
     int Id,
+    int StockMastId,
+    decimal TotalQty,
     string Name,
     string Unit,
     bool IsCompleted,
@@ -21,7 +27,7 @@ public sealed record UpdateOrderRequest(
     int Trip,
     IReadOnlyList<UpdateOrderDistributionDto> NewDistribution);
 
-public sealed record UpdateOrderDistributionDto(string Branch, int Qty);
+public sealed record UpdateOrderDistributionDto(string Branch, decimal Qty);
 
 public sealed record UpdateOrderResponse(bool Success, string Message);
 

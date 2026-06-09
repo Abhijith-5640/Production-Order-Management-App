@@ -7,10 +7,12 @@ internal static class OrderMapper
 {
     public static OrderItemDto ToDto(OrderItem item) => new(
         Id: item.Id,
+        StockMastId: item.StockMastId,
+        TotalQty: item.TotalQty ?? 0m,
         Name: item.Name,
         Unit: item.Unit,
         IsCompleted: item.IsCompleted,
         Distribution: item.Distribution
-            .Select(d => new DistributionDto(d.Branch, d.Trip, (int)(d.Qty ?? 0)))
+            .Select(d => new DistributionDto(d.PurSaleId, d.Branch, d.Trip, d.Qty ?? 0m))
             .ToList());
 }

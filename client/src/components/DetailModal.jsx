@@ -6,7 +6,7 @@ const DetailModal = ({ isOpen, activeItem, currentTrip, onClose, onUpdateQty, on
 
     const filteredDist = activeItem.distribution || [];
     // const grandTotal = filteredDist.reduce((sum, dist) => sum + dist.qty, 0);
-    const grandTotal = activeItem.TotalQty;
+    const grandTotal = activeItem.totalQty; // Use totalQty from the item instead of calculating from distribution
 
     return (
         <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -34,7 +34,7 @@ const DetailModal = ({ isOpen, activeItem, currentTrip, onClose, onUpdateQty, on
                 <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar bg-slate-50">
                     {filteredDist.map((dist, idx) => (
                         <div key={idx} className="bg-white p-4 rounded-2xl border border-slate-100 flex items-center justify-between shadow-sm">
-                            <span className="text-xs font-bold text-slate-500 uppercase flex-1 pr-2">{dist.BranchName}</span>
+                            <span className="text-xs font-bold text-slate-500 uppercase flex-1 pr-2">{dist.branch}</span>
                             <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-xl  mr-3">
                                 <button
                                     onClick={() => onUpdateQty(idx, -1)}
@@ -42,7 +42,7 @@ const DetailModal = ({ isOpen, activeItem, currentTrip, onClose, onUpdateQty, on
                                 >
                                     <Minus className="w-4 h-4" />
                                 </button>
-                                <span className="w-8 text-center font-bold text-slate-800 text-lg">{dist.Qty}</span>
+                                <span className="w-8 text-center font-bold text-slate-800 text-lg">{dist.qty}</span>
                                 <button
                                     onClick={() => onUpdateQty(idx, 1)}
                                     className="w-10 h-10 rounded-lg bg-white shadow-sm flex items-center justify-center text-emerald-600 font-bold active:bg-slate-100 transition-all border-none"
