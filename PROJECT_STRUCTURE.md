@@ -65,24 +65,25 @@ Production-Order-Management-App/
 
 ## `client/` — React 19 + Vite 7 SPA
 
-| Path | Purpose |
-|---|---|
-| `client/index.html` | Vite entry; the only thing served by Vite in dev. |
-| `client/vite.config.js` | React + Tailwind v4 plugins, dev port `5173`, `/api` proxy → `http://127.0.0.1:5099`, `build.outDir: '../src/NexusProd.Api/wwwroot'`. |
-| `client/package.json` | `react@19`, `react-dom@19`, `react-router-dom@7`, `tailwindcss@4`, `lucide-react`, `react-toastify`. Scripts: `dev`, `build`, `lint`, `preview`. |
-| `client/src/main.jsx` | React 19 `createRoot` bootstrap. |
-| `client/src/App.jsx` | `BrowserRouter` + routes: `/login` (public) and `/` (private, gated by `localStorage.nexus_authenticated`). |
-| `client/src/index.css` | Tailwind v4 entry (`@import "tailwindcss";`). |
-| `client/src/App.css` | Component-scoped CSS. |
-| `client/src/services/api.js` | Single `api` object; every method maps 1:1 to a .NET endpoint. Picks `http://localhost:5099/api` in dev, `/api` in prod. Reads the access JWT from `localStorage.nexus_token` and re-attaches it to every call. |
-| `client/src/pages/Login.jsx` | Username/password form, calls `api.login`, stores the access token + `nexus_authenticated=true`. |
-| `client/src/pages/Dashboard.jsx` | Main app: section + trip pickers, order list, "Pending Orders / Generate" action, detail/exclude modals. |
-| `client/src/components/DetailModal.jsx` | Per-item distribution editor (qty per branch). |
-| `client/src/components/PickerModal.jsx` | Section + trip selection modal. |
-| `client/src/components/FullScreenLoader.jsx` | Reusable overlay. |
-| `client/src/assets/` | `react.svg`, Vite-served static assets. |
+| Path                                         | Purpose                                                                                                                                                                                                         |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client/index.html`                          | Vite entry; the only thing served by Vite in dev.                                                                                                                                                               |
+| `client/vite.config.js`                      | React + Tailwind v4 plugins, dev port `5173`, `/api` proxy → `http://127.0.0.1:5099`, `build.outDir: '../src/NexusProd.Api/wwwroot'`.                                                                           |
+| `client/package.json`                        | `react@19`, `react-dom@19`, `react-router-dom@7`, `tailwindcss@4`, `lucide-react`, `react-toastify`. Scripts: `dev`, `build`, `lint`, `preview`.                                                                |
+| `client/src/main.jsx`                        | React 19 `createRoot` bootstrap.                                                                                                                                                                                |
+| `client/src/App.jsx`                         | `BrowserRouter` + routes: `/login` (public) and `/` (private, gated by `localStorage.nexus_authenticated`).                                                                                                     |
+| `client/src/index.css`                       | Tailwind v4 entry (`@import "tailwindcss";`).                                                                                                                                                                   |
+| `client/src/App.css`                         | Component-scoped CSS.                                                                                                                                                                                           |
+| `client/src/services/api.js`                 | Single `api` object; every method maps 1:1 to a .NET endpoint. Picks `http://localhost:5099/api` in dev, `/api` in prod. Reads the access JWT from `localStorage.nexus_token` and re-attaches it to every call. |
+| `client/src/pages/Login.jsx`                 | Username/password form, calls `api.login`, stores the access token + `nexus_authenticated=true`.                                                                                                                |
+| `client/src/pages/Dashboard.jsx`             | Main app: section + trip pickers, order list, "Pending Orders / Generate" action, detail/exclude modals.                                                                                                        |
+| `client/src/components/DetailModal.jsx`      | Per-item distribution editor (qty per branch).                                                                                                                                                                  |
+| `client/src/components/PickerModal.jsx`      | Section + trip selection modal.                                                                                                                                                                                 |
+| `client/src/components/FullScreenLoader.jsx` | Reusable overlay.                                                                                                                                                                                               |
+| `client/src/assets/`                         | `react.svg`, Vite-served static assets.                                                                                                                                                                         |
 
 **Data flow at a glance**
+
 1. Login → `api.login` → `/api/auth/login` → access token stored in `localStorage`, `nexus_authenticated=true`.
 2. Dashboard mount → `api.getSections()` → `/api/sections` → list of sections.
 3. Section picked → `api.getTrips(section)` → `/api/trips?section=…` → list of trips.
@@ -96,84 +97,84 @@ Production-Order-Management-App/
 
 ## `src/NexusProd.Api/` — ASP.NET Core 8 minimal API
 
-| Path | Purpose |
-|---|---|
-| `Program.cs` | Composition root. Configures logging, settings, `AddApplication` / `AddInfrastructure` / `AddUpdater`, JWT bearer auth, CORS (loopback only), problem-details exception handler, static files, auth middleware, `Map*Endpoints`, SPA fallback to `index.html`. |
-| `NexusProd.Api.csproj` | `net8.0`, `win-x64`, self-contained, single-file publish. Refs: Dapper, MySqlConnector, BCrypt.Net-Next, JwtBearer, Swashbuckle, Serilog (console + file), System.IdentityModel.Tokens.Jwt. **MSBuild target** `NpmBuildClient` runs `npm --prefix ..\..\client run build` before `BeforeBuild`; `CopySpaToOutput` mirrors `wwwroot/` into `bin/Debug/.../wwwroot/` so `dotnet build` (not just `dotnet publish`) is runnable. |
-| `appsettings.json`, `appsettings.Development.json` | `JwtSettings`, `UpdateServerSettings`, `Serilog`, default Kestrel URL `http://0.0.0.0:5099`. |
-| `Resources/default_db_config.json` | Embedded + copied to output. The seed config used on first run when no `db_config.json` exists next to the binary. |
-| `globalusings.cs` | Project-wide `using` aliases. |
-| `wwwroot/` | Vite build output. In source: `index.html` + `assets/`. The MSBuild target refreshes these on every build. |
+| Path                                               | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Program.cs`                                       | Composition root. Configures logging, settings, `AddApplication` / `AddInfrastructure` / `AddUpdater`, JWT bearer auth, CORS (loopback only), problem-details exception handler, static files, auth middleware, `Map*Endpoints`, SPA fallback to `index.html`.                                                                                                                                                                 |
+| `NexusProd.Api.csproj`                             | `net8.0`, `win-x64`, self-contained, single-file publish. Refs: Dapper, MySqlConnector, BCrypt.Net-Next, JwtBearer, Swashbuckle, Serilog (console + file), System.IdentityModel.Tokens.Jwt. **MSBuild target** `NpmBuildClient` runs `npm --prefix ..\..\client run build` before `BeforeBuild`; `CopySpaToOutput` mirrors `wwwroot/` into `bin/Debug/.../wwwroot/` so `dotnet build` (not just `dotnet publish`) is runnable. |
+| `appsettings.json`, `appsettings.Development.json` | `JwtSettings`, `UpdateServerSettings`, `Serilog`, default Kestrel URL `http://0.0.0.0:5099`.                                                                                                                                                                                                                                                                                                                                   |
+| `Resources/default_db_config.json`                 | Embedded + copied to output. The seed config used on first run when no `db_config.json` exists next to the binary.                                                                                                                                                                                                                                                                                                             |
+| `globalusings.cs`                                  | Project-wide `using` aliases.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `wwwroot/`                                         | Vite build output. In source: `index.html` + `assets/`. The MSBuild target refreshes these on every build.                                                                                                                                                                                                                                                                                                                     |
 
 ### `Api/` — HTTP layer
 
-| Path | Purpose |
-|---|---|
-| `Api/Endpoints/AuthEndpoints.cs` | `/api/auth/login` (anon), `/api/auth/refresh` (anon, reads cookie), `/api/auth/logout`, `/api/auth/me` (authenticated). Sets the refresh JWT in an `httpOnly` cookie. |
-| `Api/Endpoints/OrderEndpoints.cs` | `GET /api/orders/check-pending`, `POST /api/orders/generate`, `GET /api/orders?section=&trip=`, `POST /api/orders/update`, `POST /api/orders/exclude`. All under `RequireAuthorization("AuthenticatedUser")`. |
-| `Api/Endpoints/LookupEndpoints.cs` | `GET /api/sections`, `GET /api/trips?section=…`, `GET /api/server-info`. |
-| `Api/Endpoints/ConfigEndpoints.cs` | `POST /api/config/save`, `POST /api/config/test`. The path that lets the user edit `db_config.json` from the UI. |
-| `Api/Endpoints/UpdaterEndpoints.cs` | `POST /api/updater/check`, `GET /api/updater/status`. |
-| `Api/Endpoints/ResultExtensions.cs` | `Result<T>` → `IResult` mapper. Translates the typed `Error` union into the right HTTP status + JSON. |
-| `Api/Contracts/*.cs` | Request/response DTOs (records). One file per resource family: `Auth`, `Order`, `Lookup`, `Config`. |
-| `Api/Mappers/OrderMapper.cs` | Domain entity → DTO conversion for orders. |
-| `Api/Filters/ProblemDetailsExceptionHandler.cs` | `IExceptionHandler` — last-resort 500 → RFC 7807 `application/problem+json`. |
-| `Api/Middleware/JwtBlacklistMiddleware.cs` | Rejects access tokens whose JTI is in the in-memory blacklist. |
+| Path                                            | Purpose                                                                                                                                                                                                       |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Api/Endpoints/AuthEndpoints.cs`                | `/api/auth/login` (anon), `/api/auth/refresh` (anon, reads cookie), `/api/auth/logout`, `/api/auth/me` (authenticated). Sets the refresh JWT in an `httpOnly` cookie.                                         |
+| `Api/Endpoints/OrderEndpoints.cs`               | `GET /api/orders/check-pending`, `POST /api/orders/generate`, `GET /api/orders?section=&trip=`, `POST /api/orders/update`, `POST /api/orders/exclude`. All under `RequireAuthorization("AuthenticatedUser")`. |
+| `Api/Endpoints/LookupEndpoints.cs`              | `GET /api/sections`, `GET /api/trips?section=…`, `GET /api/server-info`.                                                                                                                                      |
+| `Api/Endpoints/ConfigEndpoints.cs`              | `POST /api/config/save`, `POST /api/config/test`. The path that lets the user edit `db_config.json` from the UI.                                                                                              |
+| `Api/Endpoints/UpdaterEndpoints.cs`             | `POST /api/updater/check`, `GET /api/updater/status`.                                                                                                                                                         |
+| `Api/Endpoints/ResultExtensions.cs`             | `Result<T>` → `IResult` mapper. Translates the typed `Error` union into the right HTTP status + JSON.                                                                                                         |
+| `Api/Contracts/*.cs`                            | Request/response DTOs (records). One file per resource family: `Auth`, `Order`, `Lookup`, `Config`.                                                                                                           |
+| `Api/Mappers/OrderMapper.cs`                    | Domain entity → DTO conversion for orders.                                                                                                                                                                    |
+| `Api/Filters/ProblemDetailsExceptionHandler.cs` | `IExceptionHandler` — last-resort 500 → RFC 7807 `application/problem+json`.                                                                                                                                  |
+| `Api/Middleware/JwtBlacklistMiddleware.cs`      | Rejects access tokens whose JTI is in the in-memory blacklist.                                                                                                                                                |
 
 ### `Application/` — Use cases (handlers)
 
 `IHandler<TRequest, TResponse>` is the only abstraction a handler needs. Handlers return `Result<TResponse>`; a typed `Error` union describes success/failure reasons and drives the HTTP status mapping in the endpoint.
 
-| Path | Purpose |
-|---|---|
-| `Application/Common/IHandler.cs` | `IHandler<TRequest, TResponse>` + `IRequest<TResponse>`. |
-| `Application/Common/Result.cs` | `Result<T>` discriminated union + `Ok` / `Fail` factories. |
-| `Application/Common/Error.cs` | Typed `Error` (Unauthorized, InvalidInput, DatabaseError, ConfigurationError, NotFound, …). |
-| `Application/Common/ValidationException.cs` | Thrown by handlers/validators; caught by the global exception handler. |
-| `Application/DependencyInjection.cs` | One place to register every handler. `AddApplication()`. |
-| `Application/UseCases/Auth/` | `LoginHandler`, `RefreshHandler`, `LogoutHandler`, `GetCurrentUserHandler`. |
-| `Application/UseCases/Orders/` | `CheckPendingHandler`, `GenerateInvoicesHandler`, `GetOrdersHandler`, `UpdateInvoiceHandler`, `ExcludeItemHandler`. |
-| `Application/UseCases/Lookups/` | `GetSectionsHandler`, `GetTripsHandler`, `GetServerInfoHandler`. |
-| `Application/UseCases/Config/` | `SaveConfigHandler`, `TestDbHandler`, `CheckUpdateHandler`, `GetUpdateStatusHandler`. |
-| `Application/Abstractions/` | Interfaces only: `IUserRepository`, `IOrderRepository`, `IUnitOfWork`, `IJwtTokenService`, `IRefreshTokenStore`, `IPasswordHasher`, `IClock`, `IDbConfigStore`, `IUpdateServer`, `IUpdateInstaller`, `IUpdateState`, `IUpdateTrigger`. |
+| Path                                        | Purpose                                                                                                                                                                                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Application/Common/IHandler.cs`            | `IHandler<TRequest, TResponse>` + `IRequest<TResponse>`.                                                                                                                                                                               |
+| `Application/Common/Result.cs`              | `Result<T>` discriminated union + `Ok` / `Fail` factories.                                                                                                                                                                             |
+| `Application/Common/Error.cs`               | Typed `Error` (Unauthorized, InvalidInput, DatabaseError, ConfigurationError, NotFound, …).                                                                                                                                            |
+| `Application/Common/ValidationException.cs` | Thrown by handlers/validators; caught by the global exception handler.                                                                                                                                                                 |
+| `Application/DependencyInjection.cs`        | One place to register every handler. `AddApplication()`.                                                                                                                                                                               |
+| `Application/UseCases/Auth/`                | `LoginHandler`, `RefreshHandler`, `LogoutHandler`, `GetCurrentUserHandler`.                                                                                                                                                            |
+| `Application/UseCases/Orders/`              | `CheckPendingHandler`, `GenerateInvoicesHandler`, `GetOrdersHandler`, `UpdateInvoiceHandler`, `ExcludeItemHandler`.                                                                                                                    |
+| `Application/UseCases/Lookups/`             | `GetSectionsHandler`, `GetTripsHandler`, `GetServerInfoHandler`.                                                                                                                                                                       |
+| `Application/UseCases/Config/`              | `SaveConfigHandler`, `TestDbHandler`, `CheckUpdateHandler`, `GetUpdateStatusHandler`.                                                                                                                                                  |
+| `Application/Abstractions/`                 | Interfaces only: `IUserRepository`, `IOrderRepository`, `IUnitOfWork`, `IJwtTokenService`, `IRefreshTokenStore`, `IPasswordHasher`, `IClock`, `IDbConfigStore`, `IUpdateServer`, `IUpdateInstaller`, `IUpdateState`, `IUpdateTrigger`. |
 
-**Why a use-case layer?** Handlers stay decoupled from HTTP. The same `LoginHandler` could be invoked from a console tool, a background job, or a test fixture without touching ASP.NET. They also return `Result<T>`, so success/failure is *typed* — there are no thrown exceptions for expected failures.
+**Why a use-case layer?** Handlers stay decoupled from HTTP. The same `LoginHandler` could be invoked from a console tool, a background job, or a test fixture without touching ASP.NET. They also return `Result<T>`, so success/failure is _typed_ — there are no thrown exceptions for expected failures.
 
 ### `Domain/` — Entities and value objects
 
-| Path | Purpose |
-|---|---|
-| `Domain/Entities/User.cs` | `Id`, `UserName`, `PasswordHash`, `IsActive`, `DefaultBranchId`. |
-| `Domain/Entities/OrderItem.cs` | Item with `Distribution: List<DistributionEntry>`, `IsCompleted`. |
-| `Domain/Entities/DistributionEntry.cs` | `Branch`, `Trip`, `Qty`. |
-| `Domain/Entities/Section.cs`, `Domain/Entities/Trip.cs` | Lookup entities. |
-| `Domain/ValueObjects/HashedPassword.cs` | Wrapper around a bcrypt hash string. |
+| Path                                                    | Purpose                                                           |
+| ------------------------------------------------------- | ----------------------------------------------------------------- |
+| `Domain/Entities/User.cs`                               | `Id`, `UserName`, `PasswordHash`, `IsActive`, `DefaultBranchId`.  |
+| `Domain/Entities/OrderItem.cs`                          | Item with `Distribution: List<DistributionEntry>`, `IsCompleted`. |
+| `Domain/Entities/DistributionEntry.cs`                  | `Branch`, `Trip`, `Qty`.                                          |
+| `Domain/Entities/Section.cs`, `Domain/Entities/Trip.cs` | Lookup entities.                                                  |
+| `Domain/ValueObjects/HashedPassword.cs`                 | Wrapper around a bcrypt hash string.                              |
 
 ### `Infrastructure/` — Adapters
 
-| Path | Purpose |
-|---|---|
-| `Infrastructure/DependencyInjection.cs` | `AddInfrastructure(IConfiguration)`. Registers `MySqlConnectionFactory`, repositories, `BcryptPasswordHasher`, `JwtTokenService`, the in-memory refresh + access-blacklist stores, `FileDbConfigStore`, `SystemClock`, and the placeholder `NullUpdateInstaller`. |
-| `Infrastructure/Configuration/Settings.cs` | `JwtSettings`, `UpdateServerSettings`. |
-| `Infrastructure/Persistence/MySqlConnectionFactory.cs` | Opens a `MySqlConnection` using the active `DbConfig` (read by `FileDbConfigStore`). |
-| `Infrastructure/Persistence/MySqlUserRepository.cs` | Dapper-based user lookup + bcrypt verify. |
-| `Infrastructure/Persistence/MySqlOrderRepository.cs` | Dapper-based reads + transactional writes: `CheckPendingOrdersAsync`, `GenerateInvoicesAsync`, `GetSectionsAsync`, `GetTripsAsync`, `GetOrdersAsync`, `UpdateInvoiceAsync`, `ExcludeItemAsync`. All methods wrap the Dapper call in `try/catch` and log via injected `ILogger<T>`. |
-| `Infrastructure/Persistence/MySqlUnitOfWork.cs` | Unit-of-work façade over the connection factory. |
-| `Infrastructure/Persistence/FileDbConfigStore.cs` | Reads/writes the editable `db_config.json` next to the binary. Falls back to the embedded `Resources/default_db_config.json` on first run. |
-| `Infrastructure/Security/BcryptPasswordHasher.cs` | `IPasswordHasher` over `BCrypt.Net-Next`. |
-| `Infrastructure/Security/JwtTokenService.cs` | Issues + validates HS256 access + refresh tokens; registered as both concrete and `IJwtTokenService`. |
-| `Infrastructure/Security/InMemoryRefreshTokenStore.cs` | `IRefreshTokenStore`: stores JTIs → userId, supports revoke and lookup. |
-| `Infrastructure/Security/InMemoryAccessTokenBlacklist.cs` | `IAccessTokenBlacklist`: revoked JTIs are checked by `JwtBlacklistMiddleware`. |
-| `Infrastructure/Time/SystemClock.cs` | `IClock` implementation returning `DateTimeOffset.UtcNow`. |
+| Path                                                      | Purpose                                                                                                                                                                                                                                                                            |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Infrastructure/DependencyInjection.cs`                   | `AddInfrastructure(IConfiguration)`. Registers `MySqlConnectionFactory`, repositories, `BcryptPasswordHasher`, `JwtTokenService`, the in-memory refresh + access-blacklist stores, `FileDbConfigStore`, `SystemClock`, and the placeholder `NullUpdateInstaller`.                  |
+| `Infrastructure/Configuration/Settings.cs`                | `JwtSettings`, `UpdateServerSettings`.                                                                                                                                                                                                                                             |
+| `Infrastructure/Persistence/MySqlConnectionFactory.cs`    | Opens a `MySqlConnection` using the active `DbConfig` (read by `FileDbConfigStore`).                                                                                                                                                                                               |
+| `Infrastructure/Persistence/MySqlUserRepository.cs`       | Dapper-based user lookup + bcrypt verify.                                                                                                                                                                                                                                          |
+| `Infrastructure/Persistence/MySqlOrderRepository.cs`      | Dapper-based reads + transactional writes: `CheckPendingOrdersAsync`, `GenerateInvoicesAsync`, `GetSectionsAsync`, `GetTripsAsync`, `GetOrdersAsync`, `UpdateInvoiceAsync`, `ExcludeItemAsync`. All methods wrap the Dapper call in `try/catch` and log via injected `ILogger<T>`. |
+| `Infrastructure/Persistence/MySqlUnitOfWork.cs`           | Unit-of-work façade over the connection factory.                                                                                                                                                                                                                                   |
+| `Infrastructure/Persistence/FileDbConfigStore.cs`         | Reads/writes the editable `db_config.json` next to the binary. Falls back to the embedded `Resources/default_db_config.json` on first run.                                                                                                                                         |
+| `Infrastructure/Security/BcryptPasswordHasher.cs`         | `IPasswordHasher` over `BCrypt.Net-Next`.                                                                                                                                                                                                                                          |
+| `Infrastructure/Security/JwtTokenService.cs`              | Issues + validates HS256 access + refresh tokens; registered as both concrete and `IJwtTokenService`.                                                                                                                                                                              |
+| `Infrastructure/Security/InMemoryRefreshTokenStore.cs`    | `IRefreshTokenStore`: stores JTIs → userId, supports revoke and lookup.                                                                                                                                                                                                            |
+| `Infrastructure/Security/InMemoryAccessTokenBlacklist.cs` | `IAccessTokenBlacklist`: revoked JTIs are checked by `JwtBlacklistMiddleware`.                                                                                                                                                                                                     |
+| `Infrastructure/Time/SystemClock.cs`                      | `IClock` implementation returning `DateTimeOffset.UtcNow`.                                                                                                                                                                                                                         |
 
 ### `Updater/` — Self-update subsystem
 
-| Path | Purpose |
-|---|---|
-| `Updater/AppUpdater.cs` | Coordinates: poll `IUpdateServer`, compare versions, trigger `IUpdateInstaller` on a new release. |
-| `Updater/HttpUpdateServer.cs` | `HttpClient`-backed check + download of a versioned manifest and zip. |
-| `Updater/FileSystemUpdateInstaller.cs` | Applies a downloaded zip in place (the "real" installer, wired in after install dir is known). |
-| `Updater/DependencyInjection.cs` | `AddUpdater()` composition. |
+| Path                                   | Purpose                                                                                           |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `Updater/AppUpdater.cs`                | Coordinates: poll `IUpdateServer`, compare versions, trigger `IUpdateInstaller` on a new release. |
+| `Updater/HttpUpdateServer.cs`          | `HttpClient`-backed check + download of a versioned manifest and zip.                             |
+| `Updater/FileSystemUpdateInstaller.cs` | Applies a downloaded zip in place (the "real" installer, wired in after install dir is known).    |
+| `Updater/DependencyInjection.cs`       | `AddUpdater()` composition.                                                                       |
 
 ---
 
@@ -244,3 +245,97 @@ dotnet publish src/NexusProd.Api -c Release -r win-x64
 - `server/`, `scripts/`, root `package.json` — legacy Express/node packaging. Replaced by `src/NexusProd.Api/`. Still present in the tree but not referenced by any current build or run path.
 - `MySQL_Assets/prod_app_db_meta_data.sql` — reference/demo schema. The live database is `trader_sm_qa`.
 - `wwwroot/` source contents — generated, never hand-edited.
+
+## Database Schema — Billing Tables
+
+### INV31065BS — Intermediate Billing Staging
+
+| Column          | Type   | Notes                         |
+| --------------- | ------ | ----------------------------- |
+| pur_sale_id     | INT PK | Identity key per distribution |
+| sales_mast_id   | BIGINT | FK → INV31065 or INV31065BSD  |
+| is_for_transfer | BIT    | 0 = sale path, 1 = transfer   |
+| trip_no         | INT    | Trip reference                |
+| sale_brnch_id   | INT    | Selling branch                |
+| pur_brnch_id    | INT    | Purchasing branch             |
+| brnch_id        | INT    | Branch                        |
+| is_finalized    | BIT    | Finalization flag             |
+
+### INV31065 — Sale Master
+
+| Column        | Type          | Notes                              |
+| ------------- | ------------- | ---------------------------------- |
+| sales_mast_id | BIGINT PK AI  |                                    |
+| grand_total   | DECIMAL(18,3) | Rollup: SUM(tot_amt) from INV31066 |
+| tot_grs_amt   | DECIMAL(18,3) | Rollup: SUM(grs_amt)               |
+| tot_tax_amt   | DECIMAL(18,3) | Rollup: SUM(tax_amt)               |
+| tot_discount  | DECIMAL(18,3) | Rollup: SUM(disc_amt)              |
+| brnch_id      | INT           |                                    |
+| is_finalized  | BIT           |                                    |
+| is_completed  | BIT DEFAULT 1 |                                    |
+
+### INV31065BSD — Transfer Master
+
+| Column        | Type          | Notes                                 |
+| ------------- | ------------- | ------------------------------------- |
+| sales_mast_id | BIGINT PK AI  |                                       |
+| grand_total   | DECIMAL(18,3) | Rollup: SUM(tot_amt) from INV31066BSD |
+| tot_grs_amt   | DECIMAL(18,3) | Rollup: SUM(grs_amt)                  |
+| tot_tax_amt   | DECIMAL(18,3) | Rollup: SUM(tax_amt)                  |
+| tot_discount  | DECIMAL(18,3) | Rollup: SUM(disc_amt)                 |
+| brnch_id      | INT           |                                       |
+
+### INV31066 — Sale Detail
+
+| Column        | Type          | Notes                                 |
+| ------------- | ------------- | ------------------------------------- |
+| sales_dtls_id | BIGINT PK AI  |                                       |
+| sales_mast_id | BIGINT MUL    | FK → INV31065.sales_mast_id           |
+| stock_mast_id | INT           | Item identity — needed for row lookup |
+| sales_qty     | DECIMAL(18,3) | ← qty field to update                 |
+| sales_rate    | DECIMAL(18,3) | Unit rate                             |
+| grs_amt       | DECIMAL(18,3) | sales_rate \* sales_qty               |
+| tax_amt       | DECIMAL(18,3) | Scale by (newQty / oldQty) ratio      |
+| disc_amt      | DECIMAL(18,3) | Scale by ratio                        |
+| tot_amt       | DECIMAL(18,3) | grs_amt + scaled_tax - scaled_disc    |
+| cgst_amt      | DECIMAL(18,3) | Scale by ratio                        |
+| sgst_amt      | DECIMAL(18,3) | Scale by ratio                        |
+| cess_amt      | DECIMAL(18,3) | Scale by ratio                        |
+
+### INV31066BSD — Transfer Detail
+
+| Column        | Type          | Notes                                 |
+| ------------- | ------------- | ------------------------------------- |
+| sales_dtls_id | BIGINT PK AI  |                                       |
+| sales_mast_id | BIGINT MUL    | FK → INV31065BSD.sales_mast_id        |
+| stock_mast_id | INT           | Item identity — needed for row lookup |
+| sales_qty     | DECIMAL(18,3) | ← qty field to update                 |
+| sales_rate    | DECIMAL(18,3) |                                       |
+| grs_amt       | DECIMAL(18,3) | sales_rate \* sales_qty               |
+| tax_amt       | DECIMAL(18,3) | Scale by ratio                        |
+| disc_amt      | DECIMAL(18,3) | Scale by ratio                        |
+| tot_amt       | DECIMAL(18,3) | grs_amt + scaled_tax - scaled_disc    |
+| cgst_amt      | DECIMAL(18,3) | Scale by ratio                        |
+| sgst_amt      | DECIMAL(18,3) | Scale by ratio                        |
+| cess_amt      | DECIMAL(18,3) | Scale by ratio                        |
+
+## Cascade Rules on Qty Update
+
+### Sale path (is_for_transfer = 0)
+
+1. UPDATE INV31066 — scale all amount columns by (newQty / NULLIF(sales_qty, 0))
+2. UPDATE INV31065 — rollup SUM from INV31066 for affected sales_mast_id
+3. UPDATE INV31065BS — verify if a total column exists before writing
+
+### Transfer path (is_for_transfer = 1)
+
+1. UPDATE INV31066BSD — same ratio scaling
+2. UPDATE INV31065BSD — rollup SUM from INV31066BSD for affected sales_mast_id
+
+## Key Lookup Flow
+
+INV31065BS.pur_sale_id
+→ sales_mast_id + is_for_transfer
+→ if 0: target INV31066 / INV31065
+→ if 1: target INV31066BSD / INV31065BSD
+→ match detail row by sales_mast_id + stock_mast_id
