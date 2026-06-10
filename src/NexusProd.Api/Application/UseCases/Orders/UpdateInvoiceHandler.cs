@@ -20,13 +20,19 @@ public sealed class UpdateInvoiceHandler : IHandler<UpdateInvoiceCommand, string
 
     public async Task<Result<string>> HandleAsync(UpdateInvoiceCommand request, CancellationToken cancellationToken)
     {
-        if (request.ItemId <= 0 || request.Trip <= 0 || request.NewDistribution is null)
-            return Error.InvalidInput("itemId, trip, and newDistribution are required");
+        if (request.ItemId <= 0) return Error.InvalidInput("itemId is required");
+        if (request.Trip <= 0) return Error.InvalidInput("trip is required");
+        if (request.NewDistribution is null) return Error.InvalidInput("newDistribution is required");
+        if (request.NewDistribution.Count == 0) return Error.InvalidInput("newDistribution is empty");
+        if (request.NewDistribution.Any(d => d.PurSaleId <= 0)) return Error.InvalidInput("All rows must have a valid purSaleId");
+        if (request.NewDistribution.Any(d => d.StockMastId <= 0)) return Error.InvalidInput("All rows must have a valid stockMastId");
+        if (request.NewDistribution.Any(d => d.OriginalQty < 0)) return Error.InvalidInput("originalQty must be >= 0");
+        if (request.NewDistribution.Any(d => d.Qty is not null && d.Qty < 0)) return Error.InvalidInput("qty must be >= 0 or null");
 
         try
         {
-            await _orders.UpdateInvoiceAsync(request.ItemId, request.Trip, request.NewDistribution, cancellationToken);
-            return $"Invoice updated in MySQL for item {request.ItemId}";
+            var repoMessage = await _orders.UpdateInvoiceAsync(request.ItemId, request.Trip, request.NewDistribution, cancellationToken);
+            return $"Invoice updated in MySQL for item {request.ItemId} — {repoMessage}";
         }
         catch (Exception ex)
         {

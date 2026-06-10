@@ -43,12 +43,15 @@ public interface IOrderRepository
     Task<IReadOnlyList<OrderItem>> GetOrdersAsync(int sectionId, int tripId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Updates <c>qty</c>, <c>total</c>, and sets <c>is_completed = 1</c>
-    /// for each (item, trip, branch) in <paramref name="newDistribution"/>.
-    /// Recalculates <c>sales_master.total_value</c> for every affected invoice.
-    /// Transactional.
+    /// Cascade update rooted at each distribution row's <c>pur_sale_id</c>:
+    /// looks up the master via <c>INV31065BS</c> (sale vs. transfer),
+    /// ratio-scales the matching detail row in <c>INV31066</c> /
+    /// <c>INV31065</c> (or the BSD variants for transfer), and rolls the
+    /// master totals up via SUM subqueries. Rows whose
+    /// <c>Qty == OriginalQty</c> are skipped (no-op diff). Transactional.
+    /// Returns a human-readable summary "{updated} updated, {skipped} skipped".
     /// </summary>
-    Task UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken);
+    Task<string> UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken);
 
     /// <summary>
     /// Excludes the matching <c>sales_details</c> for the current trip

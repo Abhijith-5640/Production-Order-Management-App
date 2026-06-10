@@ -32,7 +32,15 @@ public static class OrderEndpoints
         group.MapPost("/update", async (UpdateOrderRequest req, IHandler<UpdateInvoiceCommand, string> h, CancellationToken ct) =>
         {
             var dist = req.NewDistribution
-                .Select(d => new Domain.Entities.DistributionEntry { Branch = d.Branch, Trip = req.Trip, Qty = d.Qty })
+                .Select(d => new Domain.Entities.DistributionEntry
+                {
+                    PurSaleId   = d.PurSaleId,
+                    StockMastId = d.StockMastId,
+                    OriginalQty = d.OriginalQty,
+                    Branch      = d.Branch,
+                    Trip        = req.Trip,
+                    Qty         = d.Qty,
+                })
                 .ToList();
             var r = await h.HandleAsync(new UpdateInvoiceCommand(req.ItemId, req.Trip, dist), ct);
             return r.ToHttp(msg => Results.Ok(new UpdateOrderResponse(true, msg)));

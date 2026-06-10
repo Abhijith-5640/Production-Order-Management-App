@@ -9,4 +9,6 @@ public sealed class DistributionEntry
     public int Trip { get; init; }
     public decimal? Qty { get; init; }
     public int PurSaleId { get; init; }
+    public int StockMastId { get; init; }
+    public decimal OriginalQty { get; init; }
 }

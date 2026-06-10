@@ -139,7 +139,15 @@ const Dashboard = () => {
 
     const handleOpenDetail = (item) => {
         // Deep clone the object so adjustments are isolated until save
-        setDetailModal({ isOpen: true, item: JSON.parse(JSON.stringify(item)) });
+        const cloned = JSON.parse(JSON.stringify(item));
+        // Snapshot originalQty + stockMastId at modal-open so the server-side
+        // diff filter (Qty == OriginalQty) can skip unchanged rows.
+        cloned.distribution = cloned.distribution.map(d => ({
+            ...d,
+            originalQty: d.qty,
+            stockMastId: cloned.stockMastId,
+        }));
+        setDetailModal({ isOpen: true, item: cloned });
     };
 
     const handleUpdateQty = (idx, delta) => {
@@ -152,9 +160,17 @@ const Dashboard = () => {
         setLoading({ state: true, text: 'Updating Trip Invoice...' });
         try {
             const { item } = detailModal;
-            // Project DistributionDto ({ branch, trip, qty }) -> UpdateOrderDistributionDto ({ branch, qty })
-            const newDistribution = item.distribution.map(d => ({ branch: d.branch, qty: d.qty }));
-            const result = await api.updateInvoice(item.id, currentTrip.TripId, newDistribution);
+            const tripId = currentTrip.id;
+            // Project DistributionDto ({ branch, trip, qty, purSaleId, stockMastId, originalQty })
+            // -> UpdateOrderDistributionDto ({ purSaleId, stockMastId, originalQty, branch, qty })
+            const newDistribution = item.distribution.map(d => ({
+                purSaleId: d.purSaleId,
+                stockMastId: d.stockMastId,
+                originalQty: d.originalQty,
+                branch: d.branch,
+                qty: d.qty,
+            }));
+            const result = await api.updateInvoice(item.id, tripId, newDistribution);
             if (result.success) {
                 toast.success(`Invoices updated for ${currentTrip.TripName}`);
                 setDetailModal({ isOpen: false, item: null });

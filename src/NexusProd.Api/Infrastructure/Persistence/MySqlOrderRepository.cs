@@ -281,46 +281,148 @@ public sealed class MySqlOrderRepository : IOrderRepository
         }
     }
 
-    public async Task UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken)
+    public async Task<string> UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken)
     {
+        int updated = 0, skipped = 0;
+        var mastersToRollup = new HashSet<(long SalesMastId, bool IsTransfer)>();
+
         await using var conn = await _factory.OpenAsync(cancellationToken);
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
         try
         {
-            var affected = new HashSet<int>();
-            foreach (var dist in newDistribution)
+            foreach (var d in newDistribution)
             {
-                var found = await conn.QuerySingleOrDefaultAsync<(int sales_detail_id, int sales_master_id)?>(new CommandDefinition(
-                    @"SELECT sd.sales_detail_id, sd.sales_master_id
-                      FROM sales_details sd
-                      JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
-                      JOIN trip_master tm ON sm.trip_id = tm.trip_id
-                      JOIN branch_master bm ON sm.branch_id = bm.branch_id
-                      WHERE sd.item_id = @itemId AND tm.trip_id = @tripId AND bm.branch_name = @branch",
-                    new { itemId, tripId, dist.Branch },
+                // (A) DIFF FILTER — skip rows whose qty is unchanged from the
+                // snapshot taken at modal-open. No DB work needed.
+                if (d.Qty is decimal newQty && newQty == d.OriginalQty)
+                {
+                    skipped++;
+                    continue;
+                }
+
+                // (B) BS LOOKUP — each pur_sale_id is the stable identity; the BS
+                // row points at the master and tells us sale vs. transfer.
+                var bs = await conn.QuerySingleOrDefaultAsync<(long SalesMastId, sbyte IsTransfer)?>(new CommandDefinition(
+                    @"SELECT sales_mast_id, IFNULL(is_for_transfer, 0) AS IsTransfer
+                      FROM INV31065BS
+                      WHERE pur_sale_id = @purSaleId",
+                    new { d.PurSaleId },
                     transaction: tx, cancellationToken: cancellationToken));
 
-                if (found is null) continue;
-                var (detailId, masterId) = found.Value;
-                affected.Add(masterId);
+                if (bs is null)
+                {
+                    _logger.LogWarning("UpdateInvoice: INV31065BS not found for pur_sale_id {PurSaleId}", d.PurSaleId);
+                    skipped++;
+                    continue;
+                }
 
+                bool isTransfer = bs.Value.IsTransfer != 0;
+                long masterId = bs.Value.SalesMastId;
+                mastersToRollup.Add((masterId, isTransfer));
+
+                var detailTbl = isTransfer ? "INV31066BSD" : "INV31066";
+
+                // (C) DETAIL READ — read current values to scale from.
+                var existing = await conn.QuerySingleOrDefaultAsync<Inv31066Row?>(new CommandDefinition(
+                    $@"SELECT sales_qty   AS SalesQty,
+                              sales_rate  AS SalesRate,
+                              tax_amt     AS TaxAmt,
+                              disc_amt    AS DiscAmt,
+                              cgst_amt    AS CgstAmt,
+                              sgst_amt    AS SgstAmt,
+                              cess_amt    AS CessAmt
+                       FROM {detailTbl}
+                       WHERE sales_mast_id = @masterId
+                         AND stock_mast_id = @stockMastId
+                       LIMIT 1",
+                    new { masterId, d.StockMastId },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                if (existing is null)
+                {
+                    _logger.LogWarning("UpdateInvoice: {Table} row not found for sales_mast_id {MasterId} stock_mast_id {StockMastId}",
+                        detailTbl, masterId, d.StockMastId);
+                    skipped++;
+                    continue;
+                }
+
+                // (D) COMPUTE NEW VALUES
+                decimal newSalesQty = d.Qty ?? 0m;
+                decimal newGrsAmt   = Math.Round(existing.SalesRate * newSalesQty, 3);
+                decimal newTax, newDisc, newCgst, newSgst, newCess, newTot;
+
+                if (existing.SalesQty == 0m)
+                {
+                    // Edge case: cannot scale from 0 — zero out taxes/disc, tot = grs.
+                    newTax = newDisc = newCgst = newSgst = newCess = 0m;
+                    newTot = newGrsAmt;
+                }
+                else
+                {
+                    var ratio = newSalesQty / existing.SalesQty;
+                    newTax  = Math.Round(existing.TaxAmt  * ratio, 3);
+                    newDisc = Math.Round(existing.DiscAmt * ratio, 3);
+                    newCgst = Math.Round(existing.CgstAmt * ratio, 3);
+                    newSgst = Math.Round(existing.SgstAmt * ratio, 3);
+                    newCess = Math.Round(existing.CessAmt * ratio, 3);
+                    // tot_amt formula assumes cgst/sgst/cess are folded into tax_amt
+                    // (common Indian-GST convention). Spot-check the live DB before
+                    // deployment if you suspect otherwise.
+                    newTot  = newGrsAmt + newTax - newDisc;
+                }
+
+                // (E) DETAIL UPDATE
                 await conn.ExecuteAsync(new CommandDefinition(
-                    "UPDATE sales_details SET qty = @qty, total = price * @qty, is_completed = 1 WHERE sales_detail_id = @detailId",
-                    new { qty = dist.Qty, detailId },
+                    $@"UPDATE {detailTbl}
+                       SET sales_qty = @newSalesQty,
+                           grs_amt   = @newGrsAmt,
+                           tax_amt   = @newTax,
+                           disc_amt  = @newDisc,
+                           cgst_amt  = @newCgst,
+                           sgst_amt  = @newSgst,
+                           cess_amt  = @newCess,
+                           tot_amt   = @newTot
+                       WHERE sales_mast_id = @masterId
+                         AND stock_mast_id = @stockMastId",
+                    new
+                    {
+                        newSalesQty,
+                        newGrsAmt,
+                        newTax,
+                        newDisc,
+                        newCgst,
+                        newSgst,
+                        newCess,
+                        newTot,
+                        masterId,
+                        d.StockMastId,
+                    },
                     transaction: tx, cancellationToken: cancellationToken));
+
+                updated++;
             }
 
-            foreach (var masterId in affected)
+            // (F) MASTER ROLLUP — one UPDATE per unique (masterId, isTransfer).
+            // INV31065BS has no total column in this schema (see
+            // PROJECT_STRUCTURE.md), so the rollup below is the only master write.
+            foreach (var (sm, isT) in mastersToRollup)
             {
+                var masterTbl = isT ? "INV31065BSD" : "INV31065";
+                var rollupSrc = isT ? "INV31066BSD" : "INV31066";
+
                 await conn.ExecuteAsync(new CommandDefinition(
-                    @"UPDATE sales_master sm
-                      SET sm.total_value = (SELECT COALESCE(SUM(total), 0) FROM sales_details WHERE sales_master_id = @masterId)
-                      WHERE sm.sales_master_id = @masterId",
-                    new { masterId },
+                    $@"UPDATE {masterTbl}
+                       SET tot_grs_amt  = (SELECT COALESCE(SUM(grs_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           tot_tax_amt  = (SELECT COALESCE(SUM(tax_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           tot_discount = (SELECT COALESCE(SUM(disc_amt), 0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           grand_total  = (SELECT COALESCE(SUM(tot_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm)
+                       WHERE sales_mast_id = @sm",
+                    new { sm },
                     transaction: tx, cancellationToken: cancellationToken));
             }
 
             await tx.CommitAsync(cancellationToken);
+            return $"{updated} updated, {skipped} skipped";
         }
         catch (Exception ex)
         {
@@ -489,5 +591,16 @@ public sealed class MySqlOrderRepository : IOrderRepository
         public decimal qty { get; set; }
         public decimal price { get; set; }
         public int branch_id { get; set; }
+    }
+
+    private sealed class Inv31066Row
+    {
+        public decimal SalesQty  { get; set; }
+        public decimal SalesRate { get; set; }
+        public decimal TaxAmt    { get; set; }
+        public decimal DiscAmt   { get; set; }
+        public decimal CgstAmt   { get; set; }
+        public decimal SgstAmt   { get; set; }
+        public decimal CessAmt   { get; set; }
     }
 }

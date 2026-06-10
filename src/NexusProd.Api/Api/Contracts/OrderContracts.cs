@@ -27,7 +27,12 @@ public sealed record UpdateOrderRequest(
     int Trip,
     IReadOnlyList<UpdateOrderDistributionDto> NewDistribution);
 
-public sealed record UpdateOrderDistributionDto(string Branch, decimal Qty);
+public sealed record UpdateOrderDistributionDto(
+    int PurSaleId,
+    int StockMastId,
+    decimal OriginalQty,
+    string Branch,
+    decimal? Qty);
 
 public sealed record UpdateOrderResponse(bool Success, string Message);
 
