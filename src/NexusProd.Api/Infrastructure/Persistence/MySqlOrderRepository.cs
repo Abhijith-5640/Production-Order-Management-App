@@ -189,7 +189,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 bsd.sales_qty    AS Qty,
                 b.brnch_nam      AS Branch,
                 bs.pur_sale_id   AS BillId,
-                bs.trip_no       AS Trip
+                bs.trip_no       AS Trip,
+                bs.sale_brnch_id AS BrnchId
             FROM INV31065BS bs
             JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
             JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
@@ -217,7 +218,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 sd.sales_qty     AS Qty,
                 b.brnch_nam      AS Branch,
                 bs.pur_sale_id   AS BillId,
-                bs.trip_no       AS Trip
+                bs.trip_no       AS Trip,
+                bs.sale_brnch_id AS BrnchId
             FROM INV31065BS bs
             JOIN INV31065 sm     ON bs.sales_mast_id = sm.sales_mast_id
             JOIN INV31066 sd     ON sd.sales_mast_id = sm.sales_mast_id
@@ -266,7 +268,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     Branch = row.Branch,
                     PurSaleId = row.PurSaleId,
                     Trip = row.TripId,
-                    Qty = Convert.ToDecimal(row.Qty)
+                    Qty = Convert.ToDecimal(row.Qty),
+                    BrnchId = row.BrnchId,
                 });
                 // if (!ToBool(item.IsCompleted)) item = item with { IsCompleted = false };
                 byItem[row.StockMastId] = item;
@@ -302,10 +305,14 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                 // (B) BS LOOKUP — each pur_sale_id is the stable identity; the BS
                 // row points at the master and tells us sale vs. transfer.
-                var bs = await conn.QuerySingleOrDefaultAsync<(long SalesMastId, sbyte IsTransfer)?>(new CommandDefinition(
-                    @"SELECT sales_mast_id, IFNULL(is_for_transfer, 0) AS IsTransfer
-                      FROM INV31065BS
-                      WHERE pur_sale_id = @purSaleId",
+                // Join to CTGE1165 to get currency_decml for rounding precision.
+                var bs = await conn.QuerySingleOrDefaultAsync<(long SalesMastId, sbyte IsTransfer, int? CurrencyDecml)?>(new CommandDefinition(
+                    @"SELECT bs.sales_mast_id              AS SalesMastId,
+                             IFNULL(bs.is_for_transfer, 0) AS IsTransfer,
+                             br.curncy_decml             AS CurrencyDecml
+                      FROM   inv31065bs bs
+                      JOIN   ctge1165   br ON br.brnch_id = bs.sale_brnch_id
+                      WHERE  bs.pur_sale_id = @purSaleId",
                     new { d.PurSaleId },
                     transaction: tx, cancellationToken: cancellationToken));
 
@@ -316,21 +323,24 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     continue;
                 }
 
-                bool isTransfer = bs.Value.IsTransfer != 0;
-                long masterId = bs.Value.SalesMastId;
+                // Destructure to get master ID, transfer flag, and rounding precision
+                var (salesMastId, isTransferRaw, currencyDecml) = bs.Value;
+                int decimals = currencyDecml ?? 3;
+                bool isTransfer = isTransferRaw != 0;
+                long masterId = salesMastId;
                 mastersToRollup.Add((masterId, isTransfer));
 
                 var detailTbl = isTransfer ? "INV31066BSD" : "INV31066";
 
-                // (C) DETAIL READ — read current values to scale from.
+                // (C) DETAIL READ — read rate-percentage columns for recomputation.
+                // Both INV31066 (sale) and INV31066BSD (transfer) have identical columns.
                 var existing = await conn.QuerySingleOrDefaultAsync<Inv31066Row?>(new CommandDefinition(
                     $@"SELECT sales_qty   AS SalesQty,
                               sales_rate  AS SalesRate,
-                              tax_amt     AS TaxAmt,
-                              disc_amt    AS DiscAmt,
-                              cgst_amt    AS CgstAmt,
-                              sgst_amt    AS SgstAmt,
-                              cess_amt    AS CessAmt
+                              tax_per     AS TaxPer,
+                              cgst_per    AS CgstPer,
+                              sgst_per    AS SgstPer,
+                              cess_per    AS CessPer
                        FROM {detailTbl}
                        WHERE sales_mast_id = @masterId
                          AND stock_mast_id = @stockMastId
@@ -346,41 +356,28 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     continue;
                 }
 
-                // (D) COMPUTE NEW VALUES
+                // (D) COMPUTE NEW VALUES — rate-based, no discount.
+                // grs_amt = sales_rate * newSalesQty; cgst/sgst/cess derive directly from grs_amt.
+                // tax_amt uses tax_per when present, else falls back to sum of cgst + sgst + cess.
                 decimal newSalesQty = d.Qty ?? 0m;
-                decimal newGrsAmt   = Math.Round(existing.SalesRate * newSalesQty, 3);
-                decimal newTax, newDisc, newCgst, newSgst, newCess, newTot;
+                decimal newGrsAmt = Math.Round(existing.SalesRate * newSalesQty, decimals);
+                decimal newCgst = Math.Round(newGrsAmt * (existing.CgstPer / 100m), decimals);
+                decimal newSgst = Math.Round(newGrsAmt * (existing.SgstPer / 100m), decimals);
+                decimal newCess = Math.Round(newGrsAmt * (existing.CessPer / 100m), decimals);
+                decimal newTax = existing.TaxPer.HasValue
+                    ? Math.Round(newGrsAmt * (existing.TaxPer.Value / 100m), decimals)
+                    : newCgst + newSgst + newCess;
+                decimal newTot = newGrsAmt + newTax;
 
-                if (existing.SalesQty == 0m)
-                {
-                    // Edge case: cannot scale from 0 — zero out taxes/disc, tot = grs.
-                    newTax = newDisc = newCgst = newSgst = newCess = 0m;
-                    newTot = newGrsAmt;
-                }
-                else
-                {
-                    var ratio = newSalesQty / existing.SalesQty;
-                    newTax  = Math.Round(existing.TaxAmt  * ratio, 3);
-                    newDisc = Math.Round(existing.DiscAmt * ratio, 3);
-                    newCgst = Math.Round(existing.CgstAmt * ratio, 3);
-                    newSgst = Math.Round(existing.SgstAmt * ratio, 3);
-                    newCess = Math.Round(existing.CessAmt * ratio, 3);
-                    // tot_amt formula assumes cgst/sgst/cess are folded into tax_amt
-                    // (common Indian-GST convention). Spot-check the live DB before
-                    // deployment if you suspect otherwise.
-                    newTot  = newGrsAmt + newTax - newDisc;
-                }
-
-                // (E) DETAIL UPDATE
+                // (E) DETAIL UPDATE — no discount in this workflow.
                 await conn.ExecuteAsync(new CommandDefinition(
                     $@"UPDATE {detailTbl}
                        SET sales_qty = @newSalesQty,
                            grs_amt   = @newGrsAmt,
-                           tax_amt   = @newTax,
-                           disc_amt  = @newDisc,
                            cgst_amt  = @newCgst,
                            sgst_amt  = @newSgst,
                            cess_amt  = @newCess,
+                           tax_amt   = @newTax,
                            tot_amt   = @newTot
                        WHERE sales_mast_id = @masterId
                          AND stock_mast_id = @stockMastId",
@@ -388,11 +385,10 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     {
                         newSalesQty,
                         newGrsAmt,
-                        newTax,
-                        newDisc,
                         newCgst,
                         newSgst,
                         newCess,
+                        newTax,
                         newTot,
                         masterId,
                         d.StockMastId,
@@ -595,12 +591,11 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
     private sealed class Inv31066Row
     {
-        public decimal SalesQty  { get; set; }
+        public decimal SalesQty { get; set; }
         public decimal SalesRate { get; set; }
-        public decimal TaxAmt    { get; set; }
-        public decimal DiscAmt   { get; set; }
-        public decimal CgstAmt   { get; set; }
-        public decimal SgstAmt   { get; set; }
-        public decimal CessAmt   { get; set; }
+        public decimal? TaxPer { get; set; }
+        public decimal CgstPer { get; set; }
+        public decimal SgstPer { get; set; }
+        public decimal CessPer { get; set; }
     }
 }

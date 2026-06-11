@@ -24,7 +24,7 @@ const Dashboard = () => {
     // Modals
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, type: 'section' }); // 'section' | 'trip'
     const [detailModal, setDetailModal] = useState({ isOpen: false, item: null });
-    const [excludeConfirm, setExcludeConfirm] = useState({ isOpen: false, itemId: null, branch: null, itemName: '', branchName: '' });
+    const [excludeConfirm, setExcludeConfirm] = useState({ isOpen: false, itemId: null, branch: null,brnchId: null, itemName: '', branchName: '' });
 
     // Add initial loading logic similar to confirming action in old code
     const [showConfirm, setShowConfirm] = useState(false);
@@ -186,8 +186,8 @@ const Dashboard = () => {
         }
     };
 
-    const handleExcludeItem = async (itemId, branch = null) => {
-        setExcludeConfirm({ isOpen: false, itemId: null, branch: null, itemName: '', branchName: '' });
+    const handleExcludeItem = async (itemId, branch = null,brnchId) => {
+        setExcludeConfirm({ isOpen: false, itemId: null, branch: null,brnchId: null, itemName: '', branchName: '' });
         setLoading({ state: true, text: 'Excluding Item...' });
         try {
             const result = await api.excludeItem(currentSection.id, itemId, currentTrip.TripId, branch);
@@ -208,12 +208,13 @@ const Dashboard = () => {
         }
     };
 
-    const confirmExclude = (item, branch = null) => {
+    const confirmExclude = (item, branch = null, brnchId) => {
         setExcludeConfirm({
             isOpen: true,
             itemId: item.id,
             branch: branch,
             itemName: item.name,
+            brnchId: brnchId,
             branchName: branch || 'All Branches'
         });
     };
@@ -262,12 +263,12 @@ const Dashboard = () => {
 
                         <div className="flex gap-3">
                             <button
-                                onClick={() => setExcludeConfirm({ isOpen: false, itemId: null, branch: null, itemName: '', branchName: '' })}
+                                onClick={() => setExcludeConfirm({ isOpen: false, itemId: null, branch: null,brnchId: null, itemName: '', branchName: '' })}
                                 className="flex-1 py-4 bg-slate-100 text-slate-500 font-bold rounded-2xl border-none">
                                 Cancel
                             </button>
                             <button
-                                onClick={() => handleExcludeItem(excludeConfirm.itemId, excludeConfirm.branch)}
+                                onClick={() => handleExcludeItem(excludeConfirm.itemId, excludeConfirm.branch, excludeConfirm.brnchId)}
                                 className="flex-1 py-4 bg-red-500 hover:bg-red-600 text-white font-bold rounded-2xl shadow-lg shadow-red-200 border-none transition-colors">
                                 Exclude
                             </button>
@@ -382,7 +383,7 @@ const Dashboard = () => {
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        confirmExclude(item, null);
+                                                        confirmExclude(item, null, null);
                                                     }}
                                                     className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-colors flex-shrink-0"
                                                     title="Exclude from all branches on this trip"
@@ -416,7 +417,7 @@ const Dashboard = () => {
                 onClose={() => setDetailModal({ isOpen: false, item: null })}
                 onUpdateQty={handleUpdateQty}
                 onSave={handleSaveInvoice}
-                onExcludeItem={(itemId, branch) => confirmExclude(detailModal.item, branch)}
+                onExcludeItem={(itemId, branch,brnchId) => confirmExclude(detailModal.item, branch, brnchId)}
             />
         </>
     );
