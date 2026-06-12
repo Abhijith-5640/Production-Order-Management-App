@@ -24,7 +24,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
         _logger = logger;
     }
 
-    public async Task<bool> CheckPendingOrdersAsync(CancellationToken cancellationToken)
+    public async Task<bool> CheckPendingOrdersAsync(int BrnchId, CancellationToken cancellationToken)
     {
         try
         {
@@ -180,7 +180,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
             u.Qty,
             u.Branch,
             u.BillId AS PurSaleId,
-            u.Trip  AS TripId
+            u.Trip  AS TripId,
+            u.BrnchId
         FROM (
             SELECT 
                 i.itm_mast_id    AS ItemId,
@@ -190,7 +191,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 b.brnch_nam      AS Branch,
                 bs.pur_sale_id   AS BillId,
                 bs.trip_no       AS Trip,
-                bs.sale_brnch_id AS BrnchId
+                bs.pur_brnch_id AS BrnchId
             FROM INV31065BS bs
             JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
             JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
@@ -219,7 +220,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 b.brnch_nam      AS Branch,
                 bs.pur_sale_id   AS BillId,
                 bs.trip_no       AS Trip,
-                bs.sale_brnch_id AS BrnchId
+                bs.pur_brnch_id AS BrnchId
             FROM INV31065BS bs
             JOIN INV31065 sm     ON bs.sales_mast_id = sm.sales_mast_id
             JOIN INV31066 sd     ON sd.sales_mast_id = sm.sales_mast_id
@@ -428,129 +429,385 @@ public sealed class MySqlOrderRepository : IOrderRepository
         }
     }
 
-    public async Task<string> ExcludeItemAsync(int sectionId, int itemId, int currentTripId, string? branchName, CancellationToken cancellationToken)
+    public async Task<string> ExcludeItemAsync(
+        int sectionId,
+        int itemId,
+        int stockMastId,
+        int currentTripId,
+        int? brnchId,
+        IReadOnlyList<int> purSaleIds,
+        CancellationToken cancellationToken)
     {
+        if (purSaleIds is null || purSaleIds.Count == 0)
+            throw new InvalidOperationException("No purSaleIds provided for exclusion.");
+
         await using var conn = await _factory.OpenAsync(cancellationToken);
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
         try
         {
-            var trips = (await conn.QueryAsync<(int trip_id, string trip_name)>(new CommandDefinition(
-                "SELECT trip_id, trip_name FROM trip_master WHERE is_active = 1 ORDER BY trip_id",
-                transaction: tx, cancellationToken: cancellationToken))).ToList();
-            var currentIndex = trips.FindIndex(t => t.trip_id == currentTripId);
-            var nextTrip = currentIndex >= 0 && currentIndex < trips.Count - 1 ? trips[currentIndex + 1] : ((int trip_id, string trip_name)?)null;
+            // Track masters we need to roll up at the end. The master rollup is the
+            // single place that recomputes master totals from the detail rows.
+            var mastersToRollup = new HashSet<(long SalesMastId, bool IsTransfer)>();
+            int processed = 0, skipped = 0;
+            string? nextTripNameFound = null;
 
-            var details = (await conn.QueryAsync<ExcludeRow>(new CommandDefinition(
-                branchName is null
-                    ? @"SELECT sd.sales_detail_id, sd.sales_master_id, sd.qty, sd.price, sm.branch_id
-                        FROM sales_details sd
-                        JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
-                        JOIN trip_master tm ON sm.trip_id = tm.trip_id
-                        JOIN items i ON sd.item_id = i.item_id
-                        WHERE sd.item_id = @itemId AND tm.trip_id = @currentTripId AND i.section_id = @sectionId"
-                    : @"SELECT sd.sales_detail_id, sd.sales_master_id, sd.qty, sd.price, sm.branch_id
-                        FROM sales_details sd
-                        JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id
-                        JOIN trip_master tm ON sm.trip_id = tm.trip_id
-                        JOIN branch_master bm ON sm.branch_id = bm.branch_id
-                        JOIN items i ON sd.item_id = i.item_id
-                        WHERE sd.item_id = @itemId AND tm.trip_id = @currentTripId AND bm.branch_name = @branchName AND i.section_id = @sectionId",
-                new { itemId, currentTripId, branchName, sectionId },
-                transaction: tx, cancellationToken: cancellationToken))).ToList();
-
-            if (details.Count == 0)
-                throw new InvalidOperationException("No matching distribution found for exclusion.");
-
-            var affected = new HashSet<int>();
-            foreach (var d in details)
+            foreach (var purSaleId in purSaleIds.Distinct())
             {
-                affected.Add(d.sales_master_id);
-                await conn.ExecuteAsync(new CommandDefinition(
-                    "DELETE FROM sales_details WHERE sales_detail_id = @id",
-                    new { id = d.sales_detail_id },
+                // (A) BS LOOKUP — pur_sale_id is the stable identity; the BS row points
+                // at the master and tells us sale vs. transfer.
+                var bs = await conn.QuerySingleOrDefaultAsync<Inv31065BsEntry?>(new CommandDefinition(
+                    @"SELECT sales_mast_id              AS SalesMastId,
+                             IFNULL(is_for_transfer, 0) AS IsTransfer,
+                             trip_no                    AS TripNo,
+                             sale_brnch_id              AS SaleBrnchId,
+                             pur_brnch_id               AS PurBrnchId
+                      FROM   inv31065bs
+                      WHERE  pur_sale_id = @purSaleId",
+                    new { purSaleId },
                     transaction: tx, cancellationToken: cancellationToken));
 
-                if (nextTrip is null) continue;
-                var (nextTripId, nextTripName) = ((int, string))nextTrip;
-                var branchId = d.branch_id;
-
-                var existingMaster = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
-                    "SELECT sales_master_id FROM sales_master WHERE branch_id = @branchId AND trip_id = @tripId",
-                    new { branchId, tripId = nextTripId },
-                    transaction: tx, cancellationToken: cancellationToken));
-
-                int nextMasterId;
-                if (existingMaster is not null)
+                if (bs is null)
                 {
-                    nextMasterId = existingMaster.Value;
+                    _logger.LogWarning("ExcludeItem: INV31065BS not found for pur_sale_id {PurSaleId}", purSaleId);
+                    skipped++;
+                    continue;
+                }
+
+                // If brnchId is provided, only process rows for that branch.
+                if (brnchId.HasValue && bs.PurBrnchId != brnchId.Value)
+                {
+                    _logger.LogDebug("ExcludeItem: skipping pur_sale_id {PurSaleId} — pur_brnch_id {PurBrnchId} != requested brnchId {BrnchId}",
+                        purSaleId, bs.PurBrnchId, brnchId.Value);
+                    skipped++;
+                    continue;
+                }
+
+                var salesMastId = bs.SalesMastId;
+                var isTransfer = bs.IsTransfer != 0;
+                var detailTbl = isTransfer ? "INV31066BSD" : "INV31066";
+                mastersToRollup.Add((salesMastId, isTransfer));
+
+                // (B) READ the source detail row BEFORE deleting it. We need to
+                // preserve every numeric column so the rollover insert in the next
+                // trip's bill carries the exact same values. No re-derivation here
+                // — the row moves verbatim and the master rollup is the only
+                // place totals are recomputed.
+                var sourceRow = await conn.QuerySingleOrDefaultAsync<Inv31066DetailRow?>(new CommandDefinition(
+                    $@"SELECT sales_qty   AS SalesQty,
+                              sales_rate  AS SalesRate,
+                              tax_per     AS TaxPer,
+                              cgst_per    AS CgstPer,
+                              sgst_per    AS SgstPer,
+                              cess_per    AS CessPer,
+                              grs_amt     AS GrsAmt,
+                              tax_amt     AS TaxAmt,
+                              cgst_amt    AS CgstAmt,
+                              sgst_amt    AS SgstAmt,
+                              cess_amt    AS CessAmt,
+                              disc_amt    AS DiscAmt,
+                              tot_amt     AS TotAmt
+                       FROM   {detailTbl}
+                       WHERE  sales_mast_id = @salesMastId
+                         AND  stock_mast_id = @stockMastId
+                       LIMIT  1",
+                    new { salesMastId, stockMastId },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                if (sourceRow is null)
+                {
+                    _logger.LogWarning("ExcludeItem: {Table} row not found for sales_mast_id {MasterId} stock_mast_id {StockMastId}",
+                        detailTbl, salesMastId, stockMastId);
+                    skipped++;
+                    continue;
+                }
+
+                // (C) DELETE the source detail row. Master rollup below will
+                // recompute master totals from whatever detail rows remain.
+                await conn.ExecuteAsync(new CommandDefinition(
+                    $@"DELETE FROM {detailTbl}
+                       WHERE sales_mast_id = @salesMastId
+                         AND stock_mast_id = @stockMastId",
+                    new { salesMastId, stockMastId },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                // (D) TRIP ROLLOVER — find the next active trip. If none, the
+                // item is fully removed and the master rollup takes care of
+                // the current bill's totals.
+                var nextTrip = await conn.QuerySingleOrDefaultAsync<(int Id, string Name)?>(new CommandDefinition(
+                    @"SELECT id   AS Id,
+                             trip AS Name
+                      FROM   trip
+                      WHERE  id > @currentTripNo
+                      ORDER BY id ASC
+                      LIMIT 1",
+                    new { currentTripNo = currentTripId },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                if (nextTrip is null)
+                {
+                    processed++;
+                    continue;
+                }
+
+                nextTripNameFound ??= nextTrip.Value.Name;
+
+                // (E) Find the receiving bill in the next trip for the same
+                // pur_brnch_id / sale_brnch_id pair.
+                var nextBs = await conn.QuerySingleOrDefaultAsync<Inv31065BsEntry?>(new CommandDefinition(
+                    @"SELECT sales_mast_id              AS SalesMastId,
+                             IFNULL(is_for_transfer, 0) AS IsTransfer,
+                             trip_no                    AS TripNo,
+                             sale_brnch_id              AS SaleBrnchId,
+                             pur_brnch_id               AS PurBrnchId
+                      FROM   inv31065bs
+                      WHERE  pur_brnch_id  = @purBrnchId
+                        AND  sale_brnch_id = @saleBrnchId
+                        AND  trip_no       = @nextTripId
+                      LIMIT 1",
+                    new
+                    {
+                        purBrnchId = bs.PurBrnchId,
+                        saleBrnchId = bs.SaleBrnchId,
+                        nextTripId = nextTrip.Value.Id
+                    },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                if (nextBs is null)
+                {
+                    // No receiving bill in the next trip for this pur_brnch_id /
+                    // sale_brnch_id pair. The item is being permanently excluded
+                    // for this branch — flag the corresponding INV21085 row
+                    // (matched on itm_mast_id + brnch_id + trip_no) as excluded
+                    // so the source-of-truth reflects the exclusion. If no
+                    // matching INV21085 row exists, treat it as an error and
+                    // roll back the whole exclusion.
+                    _logger.LogInformation(
+                        "ExcludeItem: no receiving INV31065BS in next trip {NextTripId} for pur_brnch_id {PurBrnchId} sale_brnch_id {SaleBrnchId} — flagging INV21085.is_exclude for item {ItemId} brnch {PurBrnchId} trip {TripNo}",
+                        nextTrip.Value.Id, bs.PurBrnchId, bs.SaleBrnchId, itemId, bs.PurBrnchId, currentTripId);
+
+                    var excluded = await conn.ExecuteAsync(new CommandDefinition(
+                        @"UPDATE INV21085
+                          SET    is_exclude = 1
+                          WHERE  itm_mast_id = @itemId
+                            AND  brnch_id    = @purBrnchId
+                            AND  trip_no     = @tripNo",
+                        new
+                        {
+                            itemId,
+                            purBrnchId = bs.PurBrnchId,
+                            tripNo = currentTripId,
+                        },
+                        transaction: tx, cancellationToken: cancellationToken));
+
+                    if (excluded == 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"INV21085 row not found for item {itemId}, brnch {bs.PurBrnchId}, trip {currentTripId}. Cannot mark exclusion.");
+                    }
+
+                    processed++;
+                    continue;
+                }
+
+                var nextSalesMastId = nextBs.SalesMastId;
+                var nextIsTransfer = nextBs.IsTransfer != 0;
+                var nextDetailTbl = nextIsTransfer ? "INV31066BSD" : "INV31066";
+                mastersToRollup.Add((nextSalesMastId, nextIsTransfer));
+
+                // (F) INSERT into the next trip's bill with the exact values
+                // captured from the source row. No recalculation of the detail
+                // row's amounts — the master rollup (step G) is the single
+                // source of truth for master totals.
+                await conn.ExecuteAsync(new CommandDefinition(
+                    $@"INSERT INTO {nextDetailTbl}
+                       (sales_mast_id, stock_mast_id,
+                        sales_qty, sales_rate, tax_per, cgst_per, sgst_per, cess_per,
+                        grs_amt, tax_amt, cgst_amt, sgst_amt, cess_amt, disc_amt, tot_amt)
+                       VALUES
+                       (@nextSalesMastId, @stockMastId,
+                        @salesQty, @salesRate, @taxPer, @cgstPer, @sgstPer, @cessPer,
+                        @grsAmt, @taxAmt, @cgstAmt, @sgstAmt, @cessAmt, @discAmt, @totAmt)",
+                    new
+                    {
+                        nextSalesMastId,
+                        stockMastId,
+                        salesQty = sourceRow.SalesQty,
+                        salesRate = sourceRow.SalesRate,
+                        taxPer = sourceRow.TaxPer,
+                        cgstPer = sourceRow.CgstPer,
+                        sgstPer = sourceRow.SgstPer,
+                        cessPer = sourceRow.CessPer,
+                        grsAmt = sourceRow.GrsAmt,
+                        taxAmt = sourceRow.TaxAmt,
+                        cgstAmt = sourceRow.CgstAmt,
+                        sgstAmt = sourceRow.SgstAmt,
+                        cessAmt = sourceRow.CessAmt,
+                        discAmt = sourceRow.DiscAmt,
+                        totAmt = sourceRow.TotAmt,
+                    },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                // (F.1) INV21085 TRIP MIGRATION — the source-of-truth row that
+                // scheduled this item for the current trip must be retargeted
+                // to the new trip. If a row already exists in INV21085 for
+                // (item, branch, newTrip) we leave it alone and only update the
+                // current-trip row. Otherwise we update the current-trip row's
+                // trip_no to the new trip. Either way, the item is now bound
+                // to the receiving bill's trip.
+                var existingNewTrip = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
+                    @"SELECT 1
+                      FROM   INV21085
+                      WHERE  itm_mast_id = @itemId
+                        AND  brnch_id    = @purBrnchId
+                        AND  trip_no     = @newTripNo
+                      LIMIT 1",
+                    new
+                    {
+                        itemId,
+                        purBrnchId = bs.PurBrnchId,
+                        newTripNo = nextTrip.Value.Id,
+                    },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                if (existingNewTrip is null)
+                {
+                    var migrated = await conn.ExecuteAsync(new CommandDefinition(
+                        @"UPDATE INV21085
+                          SET    trip_no = @newTripNo
+                          WHERE  itm_mast_id = @itemId
+                            AND  brnch_id    = @purBrnchId
+                            AND  trip_no     = @currentTripNo",
+                        new
+                        {
+                            newTripNo = nextTrip.Value.Id,
+                            itemId,
+                            purBrnchId = bs.PurBrnchId,
+                            currentTripNo = currentTripId,
+                        },
+                        transaction: tx, cancellationToken: cancellationToken));
+
+                    if (migrated == 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"INV21085 row not found for item {itemId}, brnch {bs.PurBrnchId}, trip {currentTripId}. Cannot migrate trip.");
+                    }
+
+                    _logger.LogInformation(
+                        "ExcludeItem: migrated INV21085 trip for item {ItemId} brnch {PurBrnchId} from trip {CurrentTrip} to trip {NewTrip}",
+                        itemId, bs.PurBrnchId, currentTripId, nextTrip.Value.Id);
                 }
                 else
                 {
-                    var nextNo = (await conn.ExecuteScalarAsync<long?>(new CommandDefinition(
-                        "SELECT COALESCE(MAX(invoice_no), 0) FROM sales_master",
-                        transaction: tx, cancellationToken: cancellationToken)) ?? 0) + 1;
-                    nextMasterId = await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-                        @"INSERT INTO sales_master (branch_id, invoice_prefix, invoice_no, invoice_date, total_value, created_user, trip_id)
-                          VALUES (@branchId, 'INV', @nextNo, NOW(), 0, 1, @tripId);
-                          SELECT LAST_INSERT_ID();",
-                        new { branchId, nextNo, tripId = nextTripId },
-                        transaction: tx, cancellationToken: cancellationToken));
+                    _logger.LogInformation(
+                        "ExcludeItem: INV21085 already has a row for item {ItemId} brnch {PurBrnchId} on trip {NewTrip} — leaving the current-trip row in place",
+                        itemId, bs.PurBrnchId, nextTrip.Value.Id);
                 }
 
-                var existingDetail = await conn.QuerySingleOrDefaultAsync<(int sales_detail_id, decimal qty)?>(new CommandDefinition(
-                    "SELECT sales_detail_id, qty FROM sales_details WHERE sales_master_id = @masterId AND item_id = @itemId",
-                    new { masterId = nextMasterId, itemId },
-                    transaction: tx, cancellationToken: cancellationToken));
-
-                if (existingDetail is not null)
-                {
-                    var (detailId, qty) = existingDetail.Value;
-                    var newQty = qty + d.qty;
-                    await conn.ExecuteAsync(new CommandDefinition(
-                        "UPDATE sales_details SET qty = @newQty, total = price * @newQty WHERE sales_detail_id = @detailId",
-                        new { newQty, detailId },
-                        transaction: tx, cancellationToken: cancellationToken));
-                }
-                else
-                {
-                    var total = d.price * d.qty;
-                    await conn.ExecuteAsync(new CommandDefinition(
-                        @"INSERT INTO sales_details (sales_master_id, item_id, price, qty, total)
-                          VALUES (@masterId, @itemId, @price, @qty, @total)",
-                        new { masterId = nextMasterId, itemId, price = d.price, qty = d.qty, total },
-                        transaction: tx, cancellationToken: cancellationToken));
-                }
-
-                await conn.ExecuteAsync(new CommandDefinition(
-                    @"UPDATE sales_master sm
-                      SET sm.total_value = (SELECT COALESCE(SUM(total), 0) FROM sales_details WHERE sales_master_id = @masterId)
-                      WHERE sm.sales_master_id = @masterId",
-                    new { masterId = nextMasterId },
-                    transaction: tx, cancellationToken: cancellationToken));
+                processed++;
             }
 
-            foreach (var masterId in affected)
+            // (G) MASTER ROLLUP — the single place that recomputes master totals
+            // from the detail rows (after the deletes and inserts above).
+            foreach (var (sm, isT) in mastersToRollup)
             {
+                var masterTbl = isT ? "INV31065BSD" : "INV31065";
+                var rollupSrc = isT ? "INV31066BSD" : "INV31066";
+
                 await conn.ExecuteAsync(new CommandDefinition(
-                    @"UPDATE sales_master sm
-                      SET sm.total_value = (SELECT COALESCE(SUM(total), 0) FROM sales_details WHERE sales_master_id = @masterId)
-                      WHERE sm.sales_master_id = @masterId",
-                    new { masterId },
+                    $@"UPDATE {masterTbl}
+                       SET tot_grs_amt  = (SELECT COALESCE(SUM(grs_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           tot_tax_amt  = (SELECT COALESCE(SUM(tax_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           tot_discount = (SELECT COALESCE(SUM(disc_amt), 0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           grand_total  = (SELECT COALESCE(SUM(tot_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm)
+                       WHERE sales_mast_id = @sm",
+                    new { sm },
                     transaction: tx, cancellationToken: cancellationToken));
             }
 
             await tx.CommitAsync(cancellationToken);
 
-            return nextTrip is null
-                ? $"Excluded from trip {currentTripId}. Item removed completely as no next trip exists."
-                : $"Excluded from trip {currentTripId}. Rolled over to {nextTrip!.Value.trip_name}.";
+            if (processed == 0)
+                return $"Excluded 0 of {purSaleIds.Count} pur_sale rows (none matched INV31065BS).";
+
+            return nextTripNameFound is null
+                ? $"Excluded {processed} of {purSaleIds.Count} from trip {currentTripId}. No next trip — items removed."
+                : $"Excluded {processed} of {purSaleIds.Count} from trip {currentTripId}. Rolled over to {nextTripNameFound}.";
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "ExcludeItemAsync failed for sectionId {SectionId} itemId {ItemId} trip {Trip} branch {Branch}", sectionId, itemId, currentTripId, branchName);
+            _logger.LogError(ex, "ExcludeItemAsync failed for sectionId {SectionId} itemId {ItemId} stockMastId {StockMastId} trip {Trip} brnchId {BrnchId}",
+                sectionId, itemId, stockMastId, currentTripId, brnchId);
             await tx.RollbackAsync(cancellationToken);
             throw;
         }
+    }
+
+    public async Task<(int PurSaleId, int DistinctCount)?> FindSingleItemBillAsync(
+        IReadOnlyList<int> purSaleIds,
+        int stockMastId,
+        CancellationToken cancellationToken)
+    {
+        if (purSaleIds is null || purSaleIds.Count == 0)
+            return null;
+
+        await using var conn = await _factory.OpenAsync(cancellationToken);
+
+        // For each purSaleId, look up INV31065BS to get (sales_mast_id, is_for_transfer).
+        // Then count distinct stock_mast_id values in the matching detail table
+        // (INV31066 for sale, INV31066BSD for transfer). If any bill's distinct
+        // count is exactly 1 — i.e. it carries only the requested stockMastId —
+        // return that purSaleId so the caller can block the exclusion.
+        //
+        // The purSaleId loop is per-row because the count is per-bill and each
+        // purSaleId maps to its own bill (sales_mast_id, is_for_transfer pair).
+        foreach (var purSaleId in purSaleIds.Distinct())
+        {
+            var bs = await conn.QuerySingleOrDefaultAsync<(long SalesMastId, sbyte IsTransfer)?>(new CommandDefinition(
+                @"SELECT sales_mast_id              AS SalesMastId,
+                         IFNULL(is_for_transfer, 0) AS IsTransfer
+                  FROM   inv31065bs
+                  WHERE  pur_sale_id = @purSaleId
+                  LIMIT 1",
+                new { purSaleId },
+                cancellationToken: cancellationToken));
+
+            if (bs is null)
+            {
+                // purSaleId not found in BS — let the exclusion path surface that
+                // warning; not the guard's concern here.
+                continue;
+            }
+
+            var (salesMastId, isTransferRaw) = bs.Value;
+            var detailTbl = isTransferRaw != 0 ? "INV31066BSD" : "INV31066";
+
+            var distinctCount = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
+                $@"SELECT COUNT(DISTINCT stock_mast_id)
+                   FROM {detailTbl}
+                   WHERE sales_mast_id = @salesMastId",
+                new { salesMastId },
+                cancellationToken: cancellationToken)) ?? 0;
+
+            if (distinctCount == 1)
+            {
+                // Confirm the single row in the bill is in fact the stockMastId
+                // we are trying to exclude. If the bill has one row but it is a
+                // different stock_mast_id, the exclusion would not empty the
+                // bill and is safe.
+                var matchesRequested = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
+                    $@"SELECT COUNT(*)
+                       FROM {detailTbl}
+                       WHERE sales_mast_id = @salesMastId
+                         AND stock_mast_id = @stockMastId",
+                    new { salesMastId, stockMastId },
+                    cancellationToken: cancellationToken)) ?? 0;
+
+                if (matchesRequested > 0)
+                    return (purSaleId, distinctCount);
+            }
+        }
+
+        return null;
     }
 
     private static bool ToBool(object? val) => val switch
@@ -597,5 +854,31 @@ public sealed class MySqlOrderRepository : IOrderRepository
         public decimal CgstPer { get; set; }
         public decimal SgstPer { get; set; }
         public decimal CessPer { get; set; }
+    }
+
+    private sealed class Inv31065BsEntry
+    {
+        public long SalesMastId { get; set; }
+        public sbyte IsTransfer { get; set; }
+        public int TripNo { get; set; }
+        public int SaleBrnchId { get; set; }
+        public int PurBrnchId { get; set; }
+    }
+
+    private sealed class Inv31066DetailRow
+    {
+        public decimal SalesQty { get; set; }
+        public decimal SalesRate { get; set; }
+        public decimal? TaxPer { get; set; }
+        public decimal CgstPer { get; set; }
+        public decimal SgstPer { get; set; }
+        public decimal CessPer { get; set; }
+        public decimal GrsAmt { get; set; }
+        public decimal TaxAmt { get; set; }
+        public decimal CgstAmt { get; set; }
+        public decimal SgstAmt { get; set; }
+        public decimal CessAmt { get; set; }
+        public decimal DiscAmt { get; set; }
+        public decimal TotAmt { get; set; }
     }
 }

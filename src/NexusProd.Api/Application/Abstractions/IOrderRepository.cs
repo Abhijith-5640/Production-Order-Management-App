@@ -15,7 +15,7 @@ public interface IOrderRepository
     /// <summary>
     /// <c>SELECT COUNT(*) FROM order_distribution WHERE inv_gen = 0</c>.
     /// </summary>
-    Task<bool> CheckPendingOrdersAsync(CancellationToken cancellationToken);
+    Task<bool> CheckPendingOrdersAsync(int BrnchId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Groups <c>order_distribution</c> rows by <c>(branch_id, trip_id)</c>,
@@ -61,5 +61,29 @@ public interface IOrderRepository
     /// the Express API returns ("Excluded ... Rolled over to ...").
     /// Transactional.
     /// </summary>
-    Task<string> ExcludeItemAsync(int sectionId, int itemId, int currentTripId, string? branchName, CancellationToken cancellationToken);
+    Task<string> ExcludeItemAsync(
+        int sectionId,
+        int itemId,
+        int stockMastId,
+        int currentTripId,
+        int? brnchId,
+        IReadOnlyList<int> purSaleIds,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Guard for the exclude flow. For each <paramref name="purSaleIds"/>
+    /// entry, looks up the matching <c>INV31065BS</c> row, resolves the
+    /// <c>sales_mast_id</c> + <c>is_for_transfer</c> pair to the right
+    /// detail table (<c>INV31066</c> for sale, <c>INV31066BSD</c> for
+    /// transfer), and counts the distinct <c>stock_mast_id</c> values in
+    /// that bill. Returns the first <c>(purSaleId, distinctCount)</c>
+    /// pair whose distinct count is exactly 1 — meaning that bill carries
+    /// only the requested <paramref name="stockMastId"/> and cannot be
+    /// excluded. Returns <c>null</c> when every touched bill has at
+    /// least one other <c>stock_mast_id</c> (safe to exclude).
+    /// </summary>
+    Task<(int PurSaleId, int DistinctCount)?> FindSingleItemBillAsync(
+        IReadOnlyList<int> purSaleIds,
+        int stockMastId,
+        CancellationToken cancellationToken);
 }

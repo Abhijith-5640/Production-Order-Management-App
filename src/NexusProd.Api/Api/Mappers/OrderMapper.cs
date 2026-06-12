@@ -13,6 +13,6 @@ internal static class OrderMapper
         Unit: item.Unit,
         IsCompleted: item.IsCompleted,
         Distribution: item.Distribution
-            .Select(d => new DistributionDto(d.PurSaleId, d.Branch, d.Trip, d.Qty ?? 0m))
+            .Select(d => new DistributionDto(d.PurSaleId, d.Branch, d.BrnchId, d.Trip, d.Qty ?? 0m))
             .ToList());
 }

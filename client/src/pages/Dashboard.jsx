@@ -24,7 +24,7 @@ const Dashboard = () => {
     // Modals
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, type: 'section' }); // 'section' | 'trip'
     const [detailModal, setDetailModal] = useState({ isOpen: false, item: null });
-    const [excludeConfirm, setExcludeConfirm] = useState({ isOpen: false, itemId: null, branch: null,brnchId: null, itemName: '', branchName: '' });
+    const [excludeConfirm, setExcludeConfirm] = useState({ isOpen: false, itemId: null, branch: null, brnchId: null, itemName: '', branchName: '', item: null });
 
     // Add initial loading logic similar to confirming action in old code
     const [showConfirm, setShowConfirm] = useState(false);
@@ -48,7 +48,8 @@ const Dashboard = () => {
 
     const checkPendingOrders = async () => {
         try {
-            const { pendingExist } = await api.checkPendingOrders();
+            const BrnchId = Convert.ToInt32(localStorage.getItem('nexus_user_brnch_id'));
+            const { pendingExist } = await api.checkPendingOrders(BrnchId);
             setShowConfirm(pendingExist);
         } catch (error) {
             console.error('Failed to check pending orders:', error);
@@ -142,7 +143,7 @@ const Dashboard = () => {
         const cloned = JSON.parse(JSON.stringify(item));
         // Snapshot originalQty + stockMastId at modal-open so the server-side
         // diff filter (Qty == OriginalQty) can skip unchanged rows.
-        cloned.distribution = cloned.distribution.map(d => ({
+        cloned.distribution = cloned.distribution.map(d => ({   
             ...d,
             originalQty: d.qty,
             stockMastId: cloned.stockMastId,
@@ -172,7 +173,7 @@ const Dashboard = () => {
             }));
             const result = await api.updateInvoice(item.id, tripId, newDistribution);
             if (result.success) {
-                toast.success(`Invoices updated for ${currentTrip.TripName}`);
+                toast.success(`Invoices updated for ${currentTrip.Trip}`);
                 setDetailModal({ isOpen: false, item: null });
                 // Reload order list to get refreshed completed states
                 await loadOrders(currentSection, currentTrip);
@@ -186,11 +187,45 @@ const Dashboard = () => {
         }
     };
 
-    const handleExcludeItem = async (itemId, branch = null,brnchId) => {
-        setExcludeConfirm({ isOpen: false, itemId: null, branch: null,brnchId: null, itemName: '', branchName: '' });
+    const handleExcludeItem = async (itemId, branch = null, brnchId) => {
+        setExcludeConfirm({ isOpen: false, itemId: null, branch: null, brnchId: null, itemName: '', branchName: '', item: null });
         setLoading({ state: true, text: 'Excluding Item...' });
         try {
-            const result = await api.excludeItem(currentSection.id, itemId, currentTrip.TripId, branch);
+            // Find the item object from the latest state (either the open detail modal
+            // or the list - the modal takes precedence as it may have edited distributions).
+            const sourceItem = (detailModal.isOpen && detailModal.item && detailModal.item.id === itemId)
+                ? detailModal.item
+                : orderData.find(o => o.id === itemId || o.itemId === itemId);
+            const stockMastId = sourceItem?.stockMastId ?? sourceItem?.StockMastId ?? null;
+
+            // Build purSaleIds based on branch filter
+            let purSaleIds = [];
+            if (sourceItem && Array.isArray(sourceItem.distribution)) {
+                if (branch === null || branch === undefined) {
+                    // All branches: every purSaleId for this stockMastId
+                    purSaleIds = sourceItem.distribution
+                        .map(d => d.purSaleId)
+                        .filter(id => id !== undefined && id !== null);
+                } else {
+                    // Single branch: match by brnchId (preferred) or by branch name
+                    const match = sourceItem.distribution.find(d =>
+                        (brnchId != null && d.brnchId === brnchId) ||
+                        (branch && d.branch === branch)
+                    );
+                    if (match && match.purSaleId != null) {
+                        purSaleIds = [match.purSaleId];
+                    }
+                }
+            }
+
+            const result = await api.excludeItem(
+                currentSection.id,
+                itemId,
+                currentTrip.id,
+                stockMastId,
+                brnchId,
+                purSaleIds
+            );
             if (result.success) {
                 toast.success(result.message);
                 if (detailModal.isOpen) {
@@ -202,7 +237,7 @@ const Dashboard = () => {
                 toast.error(result.message || "Failed to exclude item");
             }
         } catch (error) {
-            toast.error("Failed to exclude item. Server error.");
+            toast.error(error.message ?? "Failed to exclude item. Server error.");
         } finally {
             setLoading({ state: false, text: '' });
         }
@@ -215,7 +250,8 @@ const Dashboard = () => {
             branch: branch,
             itemName: item.name,
             brnchId: brnchId,
-            branchName: branch || 'All Branches'
+            branchName: branch || 'All Branches',
+            item: item,
         });
     };
 
@@ -263,7 +299,7 @@ const Dashboard = () => {
 
                         <div className="flex gap-3">
                             <button
-                                onClick={() => setExcludeConfirm({ isOpen: false, itemId: null, branch: null,brnchId: null, itemName: '', branchName: '' })}
+                                onClick={() => setExcludeConfirm({ isOpen: false, itemId: null, branch: null, brnchId: null, itemName: '', branchName: '', item: null })}
                                 className="flex-1 py-4 bg-slate-100 text-slate-500 font-bold rounded-2xl border-none">
                                 Cancel
                             </button>

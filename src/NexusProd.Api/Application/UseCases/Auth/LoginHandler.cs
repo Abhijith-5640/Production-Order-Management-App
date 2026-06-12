@@ -6,7 +6,7 @@ using NexusProd.Api.Domain.Entities;
 namespace NexusProd.Api.Application.UseCases.Auth;
 
 public sealed record LoginCommand(string Username, string Password);
-public sealed record LoginResult(string AccessToken, DateTimeOffset AccessExpiresAt, string User, int UserId);
+public sealed record LoginResult(string AccessToken, DateTimeOffset AccessExpiresAt, string User, int UserId, int UserBrnchId);
 
 /// <summary>
 /// Authenticates a user. Falls back to the legacy plain-text password

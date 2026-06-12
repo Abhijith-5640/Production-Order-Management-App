@@ -60,12 +60,12 @@ export const api = {
         body: JSON.stringify(configData),
     }),
 
-    excludeItem: async (sectionId, itemId, currentTrip, branch = null) => request('/orders/exclude', {
+    excludeItem: async (sectionId, itemId, currentTrip, stockMastId, brnchId = null, purSaleIds = []) => request('/orders/exclude', {
         method: 'POST',
-        body: JSON.stringify({ sectionId, itemId, currentTrip, branch }),
+        body: JSON.stringify({ sectionId, itemId, currentTrip, stockMastId, brnchId, purSaleIds }),
     }),
 
-    checkPendingOrders: async () => request('/orders/check-pending'),
+    checkPendingOrders: async (BrnchId) => request(`/orders/check-pending?brnchId=${encodeURIComponent(BrnchId)}`),
 
     generateInvoices: async (userId) => request('/orders/generate', {
         method: 'POST',

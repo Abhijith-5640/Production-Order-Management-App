@@ -3,6 +3,7 @@ namespace NexusProd.Api.Api.Contracts;
 public sealed record DistributionDto(
     int PurSaleId,
     string Branch,
+    int BrnchId,
     int Trip,
     decimal Qty);
 
@@ -40,6 +41,8 @@ public sealed record ExcludeRequest(
     int SectionId,
     int ItemId,
     int CurrentTrip,
-    string? Branch);
+    int StockMastId,
+    int? BrnchId,
+    IReadOnlyList<int> PurSaleIds);
 
 public sealed record ExcludeResponse(bool Success, string Message);

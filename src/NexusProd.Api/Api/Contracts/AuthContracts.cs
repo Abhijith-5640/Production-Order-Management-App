@@ -6,7 +6,8 @@ public sealed record LoginResponse(
     string AccessToken,
     DateTimeOffset AccessExpiresAt,
     string User,
-    int UserId);
+    int UserId,
+    int UserBrnchId);
 
 public sealed record RefreshRequest(string RefreshToken);
 

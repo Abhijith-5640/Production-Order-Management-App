@@ -10,7 +10,7 @@ internal sealed record FlatRowItemM(
     decimal TotalQty,
     decimal Qty,
     string Branch,
-    int BrnchId,
     int PurSaleId,
-    int TripId
+    int TripId,
+    int BrnchId
 );

@@ -4,7 +4,7 @@ using NexusProd.Api.Application.Common;
 
 namespace NexusProd.Api.Application.UseCases.Orders;
 
-public sealed record CheckPendingQuery();
+public sealed record CheckPendingQuery(int BrnchId);
 public sealed record CheckPendingResult(bool PendingExist);
 
 public sealed class CheckPendingHandler : IHandler<CheckPendingQuery, CheckPendingResult>
@@ -22,7 +22,7 @@ public sealed class CheckPendingHandler : IHandler<CheckPendingQuery, CheckPendi
     {
         try
         {
-            var pending = await _orders.CheckPendingOrdersAsync(cancellationToken);
+            var pending = await _orders.CheckPendingOrdersAsync(request.BrnchId, cancellationToken);
             return new CheckPendingResult(pending);
         }
         catch (Exception ex)

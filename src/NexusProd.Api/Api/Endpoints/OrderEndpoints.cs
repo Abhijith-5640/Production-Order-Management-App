@@ -48,7 +48,13 @@ public static class OrderEndpoints
 
         group.MapPost("/exclude", async (ExcludeRequest req, IHandler<ExcludeItemCommand, string> h, CancellationToken ct) =>
         {
-            var r = await h.HandleAsync(new ExcludeItemCommand(req.SectionId, req.ItemId, req.CurrentTrip, req.Branch), ct);
+            var r = await h.HandleAsync(new ExcludeItemCommand(
+                req.SectionId,
+                req.ItemId,
+                req.CurrentTrip,
+                req.StockMastId,
+                req.BrnchId,
+                req.PurSaleIds ?? Array.Empty<int>()), ct);
             return r.ToHttp(msg => Results.Ok(new ExcludeResponse(true, msg)));
         });
     }
