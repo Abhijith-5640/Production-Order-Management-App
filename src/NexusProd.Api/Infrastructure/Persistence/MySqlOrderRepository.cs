@@ -29,13 +29,23 @@ public sealed class MySqlOrderRepository : IOrderRepository
         try
         {
             await using var conn = await _factory.OpenAsync(cancellationToken);
-            const string sql = "SELECT COUNT(*) FROM order_distribution WHERE inv_gen = 0";
-            var count = await conn.ExecuteScalarAsync<long>(new CommandDefinition(sql, cancellationToken: cancellationToken));
+            const string sql = @"
+                SELECT COUNT(*)
+                FROM   INV21085 od
+                JOIN   INV21100 bt ON od.brnch_id = bt.purchase_brnch_id
+                WHERE  bt.selling_brnch_id      = @brnchId
+                  AND  bt.is_automatic          = 1
+                  AND  CAST(od.dt AS DATE)      = CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
+                  AND  IFNULL(od.is_billed,  0) = 0
+                  AND  IFNULL(od.is_exclude, 0) = 0
+                  AND  od.qty                   > 0";
+            var count = await conn.ExecuteScalarAsync<long>(
+                new CommandDefinition(sql, new { brnchId = BrnchId }, cancellationToken: cancellationToken));
             return count > 0;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "CheckPendingOrdersAsync failed");
+            _logger.LogError(ex, "CheckPendingOrdersAsync failed for brnchId {BrnchId}", BrnchId);
             throw;
         }
     }
@@ -449,7 +459,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
             // single place that recomputes master totals from the detail rows.
             var mastersToRollup = new HashSet<(long SalesMastId, bool IsTransfer)>();
             int processed = 0, skipped = 0;
-            string? nextTripNameFound = null;
+            int? nextTripIdFound = null;
 
             foreach (var purSaleId in purSaleIds.Distinct())
             {
@@ -530,29 +540,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     new { salesMastId, stockMastId },
                     transaction: tx, cancellationToken: cancellationToken));
 
-                // (D) TRIP ROLLOVER — find the next active trip. If none, the
-                // item is fully removed and the master rollup takes care of
-                // the current bill's totals.
-                var nextTrip = await conn.QuerySingleOrDefaultAsync<(int Id, string Name)?>(new CommandDefinition(
-                    @"SELECT id   AS Id,
-                             trip AS Name
-                      FROM   trip
-                      WHERE  id > @currentTripNo
-                      ORDER BY id ASC
-                      LIMIT 1",
-                    new { currentTripNo = currentTripId },
-                    transaction: tx, cancellationToken: cancellationToken));
-
-                if (nextTrip is null)
-                {
-                    processed++;
-                    continue;
-                }
-
-                nextTripNameFound ??= nextTrip.Value.Name;
-
-                // (E) Find the receiving bill in the next trip for the same
-                // pur_brnch_id / sale_brnch_id pair.
+                // (D) TRIP ROLLOVER — find the next finalized receiving bill for
+                // the same pur_brnch_id / sale_brnch_id pair, on a later trip
+                // than the current one. This folds the old "next trip" +
+                // "next BS" pair of queries into a single lookup against
+                // inv31065bs. If none, the item is fully removed and the
+                // master rollup takes care of the current bill's totals.
                 var nextBs = await conn.QuerySingleOrDefaultAsync<Inv31065BsEntry?>(new CommandDefinition(
                     @"SELECT sales_mast_id              AS SalesMastId,
                              IFNULL(is_for_transfer, 0) AS IsTransfer,
@@ -560,30 +553,34 @@ public sealed class MySqlOrderRepository : IOrderRepository
                              sale_brnch_id              AS SaleBrnchId,
                              pur_brnch_id               AS PurBrnchId
                       FROM   inv31065bs
-                      WHERE  pur_brnch_id  = @purBrnchId
-                        AND  sale_brnch_id = @saleBrnchId
-                        AND  trip_no       = @nextTripId
+                      WHERE  pur_brnch_id    = @purBrnchId
+                        AND  sale_brnch_id   = @saleBrnchId
+                        AND  trip_no        <> @currentTripNo
+                        AND  trip_no         > @currentTripNo
+                        AND  is_finalized   <> 0
+                      ORDER BY trip_no ASC
                       LIMIT 1",
                     new
                     {
                         purBrnchId = bs.PurBrnchId,
                         saleBrnchId = bs.SaleBrnchId,
-                        nextTripId = nextTrip.Value.Id
+                        currentTripNo = currentTripId,
                     },
                     transaction: tx, cancellationToken: cancellationToken));
 
                 if (nextBs is null)
                 {
-                    // No receiving bill in the next trip for this pur_brnch_id /
-                    // sale_brnch_id pair. The item is being permanently excluded
-                    // for this branch — flag the corresponding INV21085 row
-                    // (matched on itm_mast_id + brnch_id + trip_no) as excluded
-                    // so the source-of-truth reflects the exclusion. If no
-                    // matching INV21085 row exists, treat it as an error and
-                    // roll back the whole exclusion.
+                    // No receiving bill on a later finalized trip for this
+                    // pur_brnch_id / sale_brnch_id pair. The item is being
+                    // permanently excluded for this branch — flag the
+                    // corresponding INV21085 row (matched on itm_mast_id +
+                    // brnch_id + trip_no) as excluded so the source-of-truth
+                    // reflects the exclusion. If no matching INV21085 row
+                    // exists, treat it as an error and roll back the whole
+                    // exclusion.
                     _logger.LogInformation(
-                        "ExcludeItem: no receiving INV31065BS in next trip {NextTripId} for pur_brnch_id {PurBrnchId} sale_brnch_id {SaleBrnchId} — flagging INV21085.is_exclude for item {ItemId} brnch {PurBrnchId} trip {TripNo}",
-                        nextTrip.Value.Id, bs.PurBrnchId, bs.SaleBrnchId, itemId, bs.PurBrnchId, currentTripId);
+                        "ExcludeItem: no later finalized INV31065BS for pur_brnch_id {PurBrnchId} sale_brnch_id {SaleBrnchId} — flagging INV21085.is_exclude for item {ItemId} brnch {PurBrnchId} trip {TripNo}",
+                        bs.PurBrnchId, bs.SaleBrnchId, itemId, bs.PurBrnchId, currentTripId);
 
                     var excluded = await conn.ExecuteAsync(new CommandDefinition(
                         @"UPDATE INV21085
@@ -608,6 +605,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     processed++;
                     continue;
                 }
+
+                nextTripIdFound ??= nextBs.TripNo;
 
                 var nextSalesMastId = nextBs.SalesMastId;
                 var nextIsTransfer = nextBs.IsTransfer != 0;
@@ -665,7 +664,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     {
                         itemId,
                         purBrnchId = bs.PurBrnchId,
-                        newTripNo = nextTrip.Value.Id,
+                        newTripNo = nextBs.TripNo,
                     },
                     transaction: tx, cancellationToken: cancellationToken));
 
@@ -679,7 +678,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                             AND  trip_no     = @currentTripNo",
                         new
                         {
-                            newTripNo = nextTrip.Value.Id,
+                            newTripNo = nextBs.TripNo,
                             itemId,
                             purBrnchId = bs.PurBrnchId,
                             currentTripNo = currentTripId,
@@ -694,13 +693,13 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                     _logger.LogInformation(
                         "ExcludeItem: migrated INV21085 trip for item {ItemId} brnch {PurBrnchId} from trip {CurrentTrip} to trip {NewTrip}",
-                        itemId, bs.PurBrnchId, currentTripId, nextTrip.Value.Id);
+                        itemId, bs.PurBrnchId, currentTripId, nextBs.TripNo);
                 }
                 else
                 {
                     _logger.LogInformation(
                         "ExcludeItem: INV21085 already has a row for item {ItemId} brnch {PurBrnchId} on trip {NewTrip} — leaving the current-trip row in place",
-                        itemId, bs.PurBrnchId, nextTrip.Value.Id);
+                        itemId, bs.PurBrnchId, nextBs.TripNo);
                 }
 
                 processed++;
@@ -729,9 +728,9 @@ public sealed class MySqlOrderRepository : IOrderRepository
             if (processed == 0)
                 return $"Excluded 0 of {purSaleIds.Count} pur_sale rows (none matched INV31065BS).";
 
-            return nextTripNameFound is null
+            return nextTripIdFound is null
                 ? $"Excluded {processed} of {purSaleIds.Count} from trip {currentTripId}. No next trip — items removed."
-                : $"Excluded {processed} of {purSaleIds.Count} from trip {currentTripId}. Rolled over to {nextTripNameFound}.";
+                : $"Excluded {processed} of {purSaleIds.Count} from trip {currentTripId}. Rolled over to trip {nextTripIdFound}.";
         }
         catch (Exception ex)
         {

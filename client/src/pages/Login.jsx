@@ -13,6 +13,15 @@ const Login = () => {
     const [dbConfig, setDbConfig] = useState({ host: '', port: '3306', database: '', user: '', password: '' });
 
     useEffect(() => {
+        // Debug helper: ensure a debug session always starts at a clean Login.
+        if (import.meta.env.DEV) {
+            localStorage.removeItem('nexus_authenticated');
+            localStorage.removeItem('nexus_token');
+            localStorage.removeItem('nexus_token_expires');
+            localStorage.removeItem('nexus_user');
+            localStorage.removeItem('nexus_user_id');
+            localStorage.removeItem('nexus_user_brnch_id');
+        }
         // Load config on mount
         const savedConfig = JSON.parse(localStorage.getItem('db_config') || '{}');
         if (Object.keys(savedConfig).length > 0) {

@@ -7,7 +7,7 @@ public sealed class User
 {
     public int Id { get; init; }
     public string UserName { get; init; } = string.Empty;
-    public int DefaultBranchId { get; init; }
+    public int UserBrnchId { get; init; }
     public bool IsActive { get; init; }
 
     /// <summary>

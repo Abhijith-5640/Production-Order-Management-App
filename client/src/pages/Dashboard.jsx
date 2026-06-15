@@ -48,8 +48,8 @@ const Dashboard = () => {
 
     const checkPendingOrders = async () => {
         try {
-            const BrnchId = Convert.ToInt32(localStorage.getItem('nexus_user_brnch_id'));
-            const { pendingExist } = await api.checkPendingOrders(BrnchId);
+            const UserBrnchId = parseInt(localStorage.getItem('nexus_user_brnch_id') ?? '0', 10) || 0;
+            const { pendingExist } = await api.checkPendingOrders(UserBrnchId);
             setShowConfirm(pendingExist);
         } catch (error) {
             console.error('Failed to check pending orders:', error);
@@ -92,6 +92,7 @@ const Dashboard = () => {
         localStorage.removeItem('nexus_authenticated');
         localStorage.removeItem('nexus_user');
         localStorage.removeItem('nexus_user_id');
+        localStorage.removeItem('nexus_user_brnch_id');
         navigate('/login');
     };
 
@@ -389,7 +390,7 @@ const Dashboard = () => {
                         <div className="space-y-2 pb-24">
                             {orderData.map((item) => {
                                 const isDone = item.isCompleted;
-                                const tripTotal = item.TotalQty;
+                                const tripTotal = item.totalQty;
 
                                 return (
                                     <div

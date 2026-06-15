@@ -64,7 +64,7 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
 
         if (!ok) return Error.Unauthorized("Invalid credentials");
 
-        var (accessToken, _, accessExpires) = _jwt.IssueAccessToken(user.Id, user.UserName, user.DefaultBranchId);
+        var (accessToken, _, accessExpires) = _jwt.IssueAccessToken(user.Id, user.UserName, user.UserBrnchId);
         var (refreshToken, refreshJti, refreshExpires) = _jwt.IssueRefreshToken(user.Id);
 
         try
@@ -81,6 +81,6 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
         // it as an httpOnly cookie. The access token goes in the JSON body.
         _ = refreshToken; // cookie set in API layer
 
-        return new LoginResult(accessToken, accessExpires, user.UserName, user.Id);
+        return new LoginResult(accessToken, accessExpires, user.UserName, user.Id, user.UserBrnchId);
     }
 }

@@ -38,7 +38,7 @@ public sealed class MySqlUserRepository : IUserRepository
                                 SELECT
                                     usr_id             AS Id,
                                     profile_name       AS UserName,
-                                    def_brnch_id       AS DefaultBranchId,
+                                    def_brnch_id       AS UserBrnchId,
                                     TRUE               AS IsActive,
                                     passwd             AS LegacyPassword,
                                     passwd             AS PasswordHash

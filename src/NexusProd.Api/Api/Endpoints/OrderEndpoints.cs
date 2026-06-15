@@ -11,9 +11,9 @@ public static class OrderEndpoints
     {
         var group = app.MapGroup("/api/orders").WithTags("Orders").RequireAuthorization("AuthenticatedUser");
 
-        group.MapGet("/check-pending", async (IHandler<CheckPendingQuery, CheckPendingResult> h, CancellationToken ct) =>
+        group.MapGet("/check-pending", async (int? brnchId, IHandler<CheckPendingQuery, CheckPendingResult> h, CancellationToken ct) =>
         {
-            var r = await h.HandleAsync(new CheckPendingQuery(), ct);
+            var r = await h.HandleAsync(new CheckPendingQuery(brnchId ?? 0), ct);
             return r.ToHttp(p => Results.Ok(new CheckPendingResponse(p.PendingExist)));
         });
 
