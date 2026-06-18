@@ -1,5 +1,4 @@
 {
-  "use_mock_db": false,
   "config": {
     "host": "localhost",
     "port": 3306,

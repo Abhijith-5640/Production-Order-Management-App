@@ -76,5 +76,14 @@ export const api = {
             body: JSON.stringify({ userId })
         });
         return response.json();
+    },
+
+    adjustInvoice: async (itemId, currentTrip, section, updates) => {
+        const response = await fetch(`${API_BASE_URL}/orders/adjust`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ itemId, currentTrip, section, updates })
+        });
+        return response.json();
     }
 }

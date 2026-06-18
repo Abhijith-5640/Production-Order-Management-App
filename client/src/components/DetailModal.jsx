@@ -72,7 +72,7 @@ const DetailModal = ({ isOpen, activeItem, currentTrip, onClose, onUpdateQty, on
                         onClick={onSave}
                         className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-xl active:scale-95 transition-all text-lg flex items-center justify-center gap-3 border-none"
                     >
-                        <CheckCircle className="w-5 h-5" /> Update Invoice
+                        <CheckCircle className="w-5 h-5" /> Update Qty
                     </button>
                 </div>
             </div>

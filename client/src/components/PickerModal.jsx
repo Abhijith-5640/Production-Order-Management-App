@@ -1,10 +1,24 @@
 import React from 'react';
 import { Layers, Truck, ChevronDown, CheckCircle } from 'lucide-react';
 
-const PickerModal = ({ isOpen, onClose, type, options, activeOption, onSelect }) => {
+const PickerModal = ({ isOpen, onClose, type, options = [], activeOption, onSelect }) => {
     if (!isOpen) return null;
-
+    //console.log('PickerModal options:', options);
     const title = type === 'section' ? "Select Production Section" : "Select Delivery Trip";
+
+    // Normalize options to always be { id, name } objects
+    const normalizedOptions = options.map((opt, index) => {
+        if (typeof opt === 'object' && opt !== null) {
+            return {
+                id: opt.id !== undefined ? opt.id : index,
+                name: opt.name || ''
+            };
+        }
+        return {
+            id: index,
+            name: String(opt)
+        };
+    });
 
     return (
         <div className="fixed inset-0 z-[100] flex items-end justify-center">
@@ -14,15 +28,18 @@ const PickerModal = ({ isOpen, onClose, type, options, activeOption, onSelect })
                 <h3 className="text-xl font-bold mb-6 text-slate-800">{title}</h3>
 
                 <div className="space-y-2 overflow-y-auto max-h-[50vh] custom-scrollbar">
-                    {options.map((opt) => {
-                        const isActive = activeOption === opt;
+                    {
+                    normalizedOptions
+                    .sort((a, b) => a.id - b.id)
+                    .map((opt, index) => {
+                        const isActive = activeOption === opt.name;
                         return (
                             <button
-                                key={opt}
-                                onClick={() => onSelect(opt)}
+                                key={opt.id ?? `${opt.name}-${index}`}
+                                onClick={() => onSelect(opt.name)}
                                 className="w-full text-left p-5 rounded-xl border border-slate-100 hover:bg-indigo-50 font-bold flex justify-between items-center mb-1 transition-all bg-white shadow-none text-slate-700"
                             >
-                                <span className={isActive ? 'text-indigo-600' : ''}>{opt}</span>
+                                <span className={isActive ? 'text-indigo-600' : ''}>{opt.name}</span>
                                 {isActive && <CheckCircle className="w-5 h-5 text-indigo-600" />}
                             </button>
                         )

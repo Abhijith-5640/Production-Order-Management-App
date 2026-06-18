@@ -7,6 +7,7 @@ import { api } from '../services/api';
 import FullScreenLoader from '../components/FullScreenLoader';
 import PickerModal from '../components/PickerModal';
 import DetailModal from '../components/DetailModal';
+import AdjustmentModal from '../components/AdjustmentModal';
 
 const Dashboard = () => {
     const navigate = useNavigate();
@@ -24,7 +25,13 @@ const Dashboard = () => {
     // Modals
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, type: 'section' }); // 'section' | 'trip'
     const [detailModal, setDetailModal] = useState({ isOpen: false, item: null });
-    const [excludeConfirm, setExcludeConfirm] = useState({ isOpen: false, itemId: null, branch: null, itemName: '', branchName: '' });
+    const [adjustmentModal, setAdjustmentModal] = useState({
+        isOpen: false,
+        item: null,
+        mode: '', // 'full_exclude' | 'single_exclude' | 'quantity_reduction'
+        branchesToAdjust: [],
+        newQuantities: null
+    });
 
     // Add initial loading logic similar to confirming action in old code
     const [showConfirm, setShowConfirm] = useState(false);
@@ -93,6 +100,7 @@ const Dashboard = () => {
         try {
             const { trips } = await api.getTrips(currentSection);
             setTrips(trips || []);
+            //console.log(trips);
             setPickerConfig({ isOpen: true, type: 'trip' });
         } catch (error) {
             toast.error('Failed to load trips');
@@ -117,7 +125,7 @@ const Dashboard = () => {
         setLoading({ state: true, text: 'Loading Order List...' });
         try {
             const { orders } = await api.getOrders(section, trip);
-            console.log(orders);
+            //console.log(orders);
             setOrderData(orders || []);
         } catch (error) {
             toast.error('Failed to load orders');
@@ -138,55 +146,135 @@ const Dashboard = () => {
     };
 
     const handleSaveInvoice = async () => {
-        setLoading({ state: true, text: 'Updating Trip Invoice...' });
-        try {
-            const { item } = detailModal;
-            const result = await api.updateInvoice(item.id, currentTrip, item.distribution);
-            if (result.success) {
-                toast.success(`Invoices updated for ${currentTrip}`);
-                setDetailModal({ isOpen: false, item: null });
-                // Reload order list to get refreshed completed states
-                await loadOrders(currentSection, currentTrip);
-            } else {
-                toast.error(result.message);
-            }
-        } catch (error) {
-            toast.error('Failed to update invoice');
-        } finally {
-            setLoading({ state: false, text: '' });
-        }
-    };
+        const { item } = detailModal;
+        const originalItem = orderData.find(i => i.id === item.id);
+        if (!originalItem) return;
 
-    const handleExcludeItem = async (itemId, branch = null) => {
-        setExcludeConfirm({ isOpen: false, itemId: null, branch: null, itemName: '', branchName: '' });
-        setLoading({ state: true, text: 'Excluding Item...' });
-        try {
-            const result = await api.excludeItem(currentSection, itemId, currentTrip, branch);
-            if (result.success) {
-                toast.success(result.message);
-                if (detailModal.isOpen) {
-                    setDetailModal({ isOpen: false, item: null });
-                }
-                // Reload list to get updated distributions
-                await loadOrders(currentSection, currentTrip);
-            } else {
-                toast.error(result.message || "Failed to exclude item");
-            }
-        } catch (error) {
-            toast.error("Failed to exclude item. Server error.");
-        } finally {
-            setLoading({ state: false, text: '' });
-        }
-    };
+        const reductions = [];
+        const finalUpdates = [];
 
-    const confirmExclude = (item, branch = null) => {
-        setExcludeConfirm({
-            isOpen: true,
-            itemId: item.id,
-            branch: branch,
-            itemName: item.name,
-            branchName: branch || 'All Branches'
+        item.distribution.forEach(dist => {
+            const origDist = originalItem.distribution.find(d => d.branch === dist.branch);
+            const origQty = origDist ? origDist.qty : 0;
+            const newQty = dist.qty;
+
+            if (newQty < origQty) {
+                reductions.push({
+                    branch: dist.branch,
+                    qty: origQty - newQty,
+                    currentQty: newQty
+                });
+            } else {
+                finalUpdates.push({
+                    branch: dist.branch,
+                    currentQty: newQty,
+                    balanceQty: 0,
+                    balanceAction: 'none',
+                    targetTrip: null
+                });
+            }
         });
+
+        if (reductions.length > 0) {
+            setAdjustmentModal({
+                isOpen: true,
+                item,
+                mode: 'quantity_reduction',
+                branchesToAdjust: reductions,
+                newQuantities: item.distribution
+            });
+        } else {
+            setLoading({ state: true, text: 'Updating Trip Invoice...' });
+            try {
+                const result = await api.adjustInvoice(item.id, currentTrip, currentSection, finalUpdates);
+                if (result.success) {
+                    toast.success(`Invoices updated for ${currentTrip}`);
+                    setDetailModal({ isOpen: false, item: null });
+                    await loadOrders(currentSection, currentTrip);
+                } else {
+                    toast.error(result.message || 'Failed to update invoice');
+                }
+            } catch (error) {
+                toast.error('Failed to update invoice');
+            } finally {
+                setLoading({ state: false, text: '' });
+            }
+        }
+    };
+
+    const handleOpenFullExclude = (item) => {
+        const branches = item.distribution.map(d => ({
+            branch: d.branch,
+            qty: d.qty,
+            currentQty: 0
+        }));
+        setAdjustmentModal({
+            isOpen: true,
+            item,
+            mode: 'full_exclude',
+            branchesToAdjust: branches,
+            newQuantities: null
+        });
+    };
+
+    const handleOpenSingleExclude = (item, branchName) => {
+        const dist = item.distribution.find(d => d.branch === branchName);
+        if (!dist) return;
+        setAdjustmentModal({
+            isOpen: true,
+            item,
+            mode: 'single_exclude',
+            branchesToAdjust: [{
+                branch: branchName,
+                qty: dist.qty,
+                currentQty: 0
+            }],
+            newQuantities: null
+        });
+    };
+
+    const handleAdjustmentConfirm = async (adjustmentUpdates) => {
+        setAdjustmentModal(prev => ({ ...prev, isOpen: false }));
+        setLoading({ state: true, text: 'Updating Invoices...' });
+        try {
+            const { item, mode, newQuantities } = adjustmentModal;
+            let finalUpdates = [];
+
+            if (mode === 'quantity_reduction') {
+                const originalItem = orderData.find(i => i.id === item.id);
+                if (originalItem && newQuantities) {
+                    newQuantities.forEach(dist => {
+                        const adj = adjustmentUpdates.find(a => a.branch === dist.branch);
+                        if (adj) {
+                            finalUpdates.push(adj);
+                        } else {
+                            finalUpdates.push({
+                                branch: dist.branch,
+                                currentQty: dist.qty,
+                                balanceQty: 0,
+                                balanceAction: 'none',
+                                targetTrip: null
+                            });
+                        }
+                    });
+                }
+            } else {
+                finalUpdates = adjustmentUpdates;
+            }
+
+            const result = await api.adjustInvoice(item.id, currentTrip, currentSection, finalUpdates);
+            if (result.success) {
+                toast.success(result.message || 'Invoice updated successfully!');
+                setDetailModal({ isOpen: false, item: null });
+                await loadOrders(currentSection, currentTrip);
+            } else {
+                toast.error(result.message || 'Failed to update invoices.');
+            }
+        } catch (error) {
+            toast.error('Server error while applying adjustments.');
+        } finally {
+            setLoading({ state: false, text: '' });
+        }
     };
 
     return (
@@ -219,33 +307,7 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Exclude Confirm Modal */}
-            {excludeConfirm.isOpen && (
-                <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"></div>
-                    <div className="relative bg-white w-full max-w-sm rounded-[2rem] shadow-2xl p-8 text-center animate-in zoom-in duration-150 border border-slate-100">
-                        <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 bg-red-50 text-red-500">
-                            <Ban className="w-10 h-10" />
-                        </div>
-                        <h3 className="text-xl font-bold text-slate-800 mb-2">Exclude Item?</h3>
-                        <p className="text-slate-500 text-sm mb-2">Are you sure you want to exclude <strong>{excludeConfirm.itemName}</strong>?</p>
-                        <p className="text-slate-400 text-xs mb-8">Branch: <span className="font-bold text-slate-600">{excludeConfirm.branchName}</span></p>
 
-                        <div className="flex gap-3">
-                            <button
-                                onClick={() => setExcludeConfirm({ isOpen: false, itemId: null, branch: null, itemName: '', branchName: '' })}
-                                className="flex-1 py-4 bg-slate-100 text-slate-500 font-bold rounded-2xl border-none">
-                                Cancel
-                            </button>
-                            <button
-                                onClick={() => handleExcludeItem(excludeConfirm.itemId, excludeConfirm.branch)}
-                                className="flex-1 py-4 bg-red-500 hover:bg-red-600 text-white font-bold rounded-2xl shadow-lg shadow-red-200 border-none transition-colors">
-                                Exclude
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* Navbar */}
             <nav className="glass-header sticky top-0 z-40 px-6 py-3 flex justify-between items-center bg-white/80 backdrop-blur-xl border-b border-slate-200">
@@ -353,7 +415,7 @@ const Dashboard = () => {
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        confirmExclude(item, null);
+                                                        handleOpenFullExclude(item);
                                                     }}
                                                     className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-colors flex-shrink-0"
                                                     title="Exclude from all branches on this trip"
@@ -381,14 +443,25 @@ const Dashboard = () => {
             />
 
             <DetailModal
-                isOpen={detailModal.isOpen}
-                activeItem={detailModal.item}
-                currentTrip={currentTrip}
-                onClose={() => setDetailModal({ isOpen: false, item: null })}
-                onUpdateQty={handleUpdateQty}
-                onSave={handleSaveInvoice}
-                onExcludeItem={(itemId, branch) => confirmExclude(detailModal.item, branch)}
-            />
+                                                isOpen={detailModal.isOpen}
+                                                activeItem={detailModal.item}
+                                                currentTrip={currentTrip}
+                                                onClose={() => setDetailModal({ isOpen: false, item: null })}
+                                                onUpdateQty={handleUpdateQty}
+                                                onSave={handleSaveInvoice}
+                                                onExcludeItem={(itemId, branch) => handleOpenSingleExclude(detailModal.item, branch)}
+                                            />
+
+                                            <AdjustmentModal
+                                                isOpen={adjustmentModal.isOpen}
+                                                item={adjustmentModal.item}
+                                                currentTrip={currentTrip}
+                                                trips={trips}
+                                                onClose={() => setAdjustmentModal(prev => ({ ...prev, isOpen: false }))}
+                                                onConfirm={handleAdjustmentConfirm}
+                                                mode={adjustmentModal.mode}
+                                                branchesToAdjust={adjustmentModal.branchesToAdjust}
+                                            />
         </>
     );
 };

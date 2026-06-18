@@ -3,8 +3,8 @@ const fs = require('fs');
 const path = require('path');
 
 const isPackaged = typeof process.pkg !== 'undefined';
-const configPath = isPackaged 
-    ? path.join(path.dirname(process.execPath), 'db_config.json') 
+const configPath = isPackaged
+    ? path.join(path.dirname(process.execPath), 'db_config.json')
     : path.join(__dirname, '../db_config.json');
 
 // Global connection pool
@@ -148,8 +148,11 @@ async function generateInvoices(userId) {
 async function getSections() {
     try {
         const db = await getPool();
-        const [rows] = await db.execute('SELECT section_name FROM sections WHERE is_active = 1');
-        return rows.map(row => row.section_name);
+        const [rows] = await db.execute('SELECT seection_id, section_name FROM sections WHERE is_active = 1 ORDER BY seection_id ASC');
+        return rows.map(row => ({
+            id: row.seection_id,
+            name: row.section_name
+        }));
     } catch (error) {
         console.error("DB getSections Error:", error);
         return [];
@@ -161,16 +164,20 @@ async function getTrips(sectionName) {
         const db = await getPool();
         // Load trips from sales data (invoices) that have items in the section
         const [rows] = await db.execute(
-            `SELECT DISTINCT tm.trip_name 
+            `SELECT DISTINCT tm.trip_name, tm.trip_id 
              FROM sales_master sm 
              JOIN sales_details sd ON sm.sales_master_id = sd.sales_master_id 
              JOIN items i ON sd.item_id = i.item_id 
              JOIN sections s ON i.section_id = s.seection_id 
              JOIN trip_master tm ON sm.trip_id = tm.trip_id 
-             WHERE s.section_name = ?`,
+             WHERE s.section_name = ?
+             ORDER BY tm.trip_id`,
             [sectionName]
         );
-        return rows.map(row => row.trip_name).sort();
+        return rows.map(row => ({
+            id: row.trip_id,
+            name: row.trip_name
+        }));
     } catch (error) {
         console.error("DB getTrips Error:", error);
         return [];
@@ -410,6 +417,126 @@ async function excludeItem(sectionName, itemId, currentTripName, branchName) {
     }
 }
 
+async function adjustItem(itemId, currentTripName, sectionName, updates) {
+    const db = await getPool();
+    const connection = await db.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        const affectedMasterIds = new Set();
+
+        for (const update of updates) {
+            const { branch, currentQty, balanceQty, balanceAction, targetTrip } = update;
+
+            // 1. Get current sales details record
+            const [rows] = await connection.execute(
+                `SELECT sd.sales_detail_id, sd.sales_master_id, sd.price, sm.branch_id 
+                 FROM sales_details sd 
+                 JOIN sales_master sm ON sd.sales_master_id = sm.sales_master_id 
+                 JOIN trip_master tm ON sm.trip_id = tm.trip_id 
+                 JOIN branch_master bm ON sm.branch_id = bm.branch_id 
+                 WHERE sd.item_id = ? AND tm.trip_name = ? AND bm.branch_name = ?`,
+                [itemId, currentTripName, branch]
+            );
+
+            if (rows.length === 0) {
+                // Not found on current trip
+                continue;
+            }
+
+            const detailId = rows[0].sales_detail_id;
+            const currentMasterId = rows[0].sales_master_id;
+            const price = Number(rows[0].price);
+            const branchId = rows[0].branch_id;
+            affectedMasterIds.add(currentMasterId);
+
+            // Update current trip quantity
+            if (currentQty > 0) {
+                await connection.execute(
+                    'UPDATE sales_details SET qty = ?, total = price * ?, is_completed = 1 WHERE sales_detail_id = ?',
+                    [currentQty, currentQty, detailId]
+                );
+            } else {
+                // Excluded from current trip
+                await connection.execute('DELETE FROM sales_details WHERE sales_detail_id = ?', [detailId]);
+            }
+
+            // Handle balance quantity rollover
+            if (balanceQty > 0 && balanceAction === 'move' && targetTrip) {
+                // Find target trip master ID
+                const [targetTripRows] = await connection.execute(
+                    'SELECT trip_id FROM trip_master WHERE trip_name = ?',
+                    [targetTrip]
+                );
+                if (targetTripRows.length === 0) {
+                    throw new Error(`Target trip ${targetTrip} not found`);
+                }
+                const targetTripId = targetTripRows[0].trip_id;
+
+                // Find or create sales_master for target trip and branch
+                const [nextMasterRows] = await connection.execute(
+                    'SELECT sales_master_id FROM sales_master WHERE branch_id = ? AND trip_id = ?',
+                    [branchId, targetTripId]
+                );
+
+                let targetMasterId;
+                if (nextMasterRows.length > 0) {
+                    targetMasterId = nextMasterRows[0].sales_master_id;
+                } else {
+                    const [maxNoRows] = await connection.execute('SELECT COALESCE(MAX(invoice_no), 0) as max_no FROM sales_master');
+                    const nextNo = maxNoRows[0].max_no + 1;
+                    const [insertMasterResult] = await connection.execute(
+                        `INSERT INTO sales_master (branch_id, invoice_prefix, invoice_no, invoice_date, total_value, created_user, trip_id) 
+                         VALUES (?, 'INV', ?, NOW(), 0, 1, ?)`,
+                        [branchId, nextNo, targetTripId]
+                    );
+                    targetMasterId = insertMasterResult.insertId;
+                }
+                affectedMasterIds.add(targetMasterId);
+
+                // Check if item already exists in target trip details
+                const [targetDetailRows] = await connection.execute(
+                    'SELECT sales_detail_id, qty FROM sales_details WHERE sales_master_id = ? AND item_id = ?',
+                    [targetMasterId, itemId]
+                );
+
+                if (targetDetailRows.length > 0) {
+                    const targetDetailId = targetDetailRows[0].sales_detail_id;
+                    const newQty = Number(targetDetailRows[0].qty) + Number(balanceQty);
+                    await connection.execute(
+                        'UPDATE sales_details SET qty = ?, total = price * ? WHERE sales_detail_id = ?',
+                        [newQty, newQty, targetDetailId]
+                    );
+                } else {
+                    await connection.execute(
+                        'INSERT INTO sales_details (sales_master_id, item_id, price, qty, total) VALUES (?, ?, ?, ?, ?)',
+                        [targetMasterId, itemId, price, balanceQty, price * balanceQty]
+                    );
+                }
+            }
+        }
+
+        // Recalculate total_value for all affected invoices (both current and target)
+        for (const masterId of affectedMasterIds) {
+            await connection.execute(
+                `UPDATE sales_master sm 
+                 SET sm.total_value = (SELECT COALESCE(SUM(total), 0) FROM sales_details WHERE sales_master_id = ?) 
+                 WHERE sm.sales_master_id = ?`,
+                [masterId, masterId]
+            );
+        }
+
+        await connection.commit();
+        connection.release();
+        return { success: true, message: "Adjustments applied successfully." };
+    } catch (error) {
+        await connection.rollback();
+        connection.release();
+        console.error("DB adjustItem Error:", error);
+        return { success: false, message: "Failed to apply adjustments: " + error.message };
+    }
+}
+
 module.exports = {
     loginUser,
     checkPendingOrders,
@@ -418,5 +545,6 @@ module.exports = {
     getTrips,
     getOrders,
     updateInvoice,
-    excludeItem
+    excludeItem,
+    adjustItem
 };

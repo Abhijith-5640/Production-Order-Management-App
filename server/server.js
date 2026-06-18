@@ -23,7 +23,6 @@ if (isPackaged && !fs.existsSync(configPath)) {
             console.log('📝 Created default db_config.json at', configPath);
         } else {
             const defaultConfig = {
-                use_mock_db: false,
                 config: {
                     host: "localhost",
                     port: 3306,
@@ -123,18 +122,33 @@ app.post('/api/orders/exclude', async (req, res) => {
     }
 });
 
+app.post('/api/orders/adjust', async (req, res) => {
+    const { itemId, currentTrip, section, updates } = req.body;
+
+    if (!itemId || !currentTrip || !section || !updates) {
+        return res.status(400).json({ success: false, message: "Missing required fields for adjustment" });
+    }
+
+    const result = await db.adjustItem(itemId, currentTrip, section, updates);
+    if (result.success) {
+        res.json(result);
+    } else {
+        res.status(500).json(result);
+    }
+});
+
 app.post('/api/config', (req, res) => {
     try {
 
         // Read existing structure
-        let currentConfig = { use_mock_db: true, config: {} };
+        let currentConfig = { config: {} };
         if (fs.existsSync(configPath)) {
             const fileData = fs.readFileSync(configPath, 'utf8');
             currentConfig = JSON.parse(fileData);
         }
 
         // Merge with incoming req.body 
-        // req.body should have: host, port, database, user, password, use_mock_db
+        // req.body should have: host, port, database, user, password
         currentConfig.config = {
             host: req.body.host || currentConfig.config.host,
             port: Number(req.body.port) || currentConfig.config.port,
@@ -142,15 +156,6 @@ app.post('/api/config', (req, res) => {
             password: req.body.password || currentConfig.config.password,
             database: req.body.database || currentConfig.config.database
         };
-
-        if (req.body.use_mock_db !== undefined) {
-            currentConfig.use_mock_db = req.body.use_mock_db;
-        } else {
-            // Let UI decide, typically false if they configure DB
-            currentConfig.use_mock_db = false;
-        }
-
-      
 
         fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2), 'utf8');
         res.json({ success: true, message: 'Configuration saved successfully. Please restart server if needed.' });
@@ -187,7 +192,7 @@ const clientDistPath = path.join(__dirname, '../client/dist');
 if (fs.existsSync(clientDistPath)) {
     console.log(`📂 Serving static frontend from: ${clientDistPath}`);
     app.use(express.static(clientDistPath));
-    app.get('/{*splat}', (req, res, next) => {
+    app.get('*splat', (req, res, next) => {
         // Fall through to API 404 if it's an API route
         if (req.path.startsWith('/api')) {
             return next();
