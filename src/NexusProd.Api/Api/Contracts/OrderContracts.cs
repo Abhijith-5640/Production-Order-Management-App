@@ -20,7 +20,7 @@ public sealed record OrdersResponse(IReadOnlyList<OrderItemDto> Orders);
 
 public sealed record CheckPendingResponse(bool PendingExist);
 
-public sealed record GenerateInvoicesRequest(int UserId);
+public sealed record GenerateInvoicesRequest(int UserId, int BrnchId, int UserCounterId);
 public sealed record GenerateInvoicesResponse(bool Success, string Message, int InvoiceCount);
 
 public sealed record UpdateOrderRequest(

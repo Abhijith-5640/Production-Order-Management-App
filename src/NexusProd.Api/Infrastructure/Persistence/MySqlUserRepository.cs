@@ -39,10 +39,12 @@ public sealed class MySqlUserRepository : IUserRepository
                                     usr_id             AS Id,
                                     profile_name       AS UserName,
                                     def_brnch_id       AS UserBrnchId,
+                                    counter_id         AS UserCounterId,
                                     TRUE               AS IsActive,
                                     passwd             AS LegacyPassword,
                                     passwd             AS PasswordHash
                                 FROM ctge1075
+                                INNER JOIN INV21032 on INV21032.cashier_usr_id = ctge1075.usr_id
                                 WHERE usr_nam = @EncodedUsr
                                 LIMIT 1";
             var cmd = new CommandDefinition(sql, new { EncodedUsr }, cancellationToken: cancellationToken);

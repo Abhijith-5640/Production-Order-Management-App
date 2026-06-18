@@ -33,7 +33,10 @@ const Dashboard = () => {
     const hasSelection = currentSection && currentTrip;
 
     useEffect(() => {
-        fetchSections();
+        // On first mount, only check for pending orders. Sections are loaded
+        // *after* the user has decided whether to generate the day's bills —
+        // either by completing the Generate flow (which calls fetchSections at
+        // the end) or by choosing "Later" (see handleDismissPending).
         checkPendingOrders();
     }, []);
 
@@ -56,12 +59,22 @@ const Dashboard = () => {
         }
     };
 
+    // Called when the user dismisses the "Pending Orders" prompt with
+    // "Later". Sections are now loaded here so the UI doesn't sit empty
+    // while the user decides.
+    const handleDismissPending = () => {
+        setShowConfirm(false);
+        fetchSections();
+    };
+
     const handleGenerateInvoices = async () => {
         setShowConfirm(false);
         setLoading({ state: true, text: 'Generating Invoices...' });
         try {
             const userId = localStorage.getItem('nexus_user_id');
-            const result = await api.generateInvoices(userId);
+            const userCounterId = parseInt(localStorage.getItem('nexus_user_counter_id') ?? '0', 10) || 0;
+            const brnchId = parseInt(localStorage.getItem('nexus_user_brnch_id') ?? '0', 10) || 0;
+            const result = await api.generateInvoices(userId, brnchId, userCounterId);
             if (result.success) {
                 toast.success(result.message || 'Invoices generated successfully!');
                 await fetchSections();
@@ -272,7 +285,7 @@ const Dashboard = () => {
                         <p className="text-slate-500 text-sm mb-8">New branch orders detected for today. Generate invoices?</p>
                         <div className="flex gap-3">
                             <button
-                                onClick={() => setShowConfirm(false)}
+                                onClick={handleDismissPending}
                                 className="flex-1 py-4 bg-slate-100 text-slate-500 font-bold rounded-2xl border-none">
                                 Later
                             </button>

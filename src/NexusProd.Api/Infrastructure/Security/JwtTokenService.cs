@@ -23,7 +23,7 @@ public sealed class JwtTokenService : IJwtTokenService
         _clock = clock;
     }
 
-    public (string Token, string Jti, DateTimeOffset ExpiresAt) IssueAccessToken(int userId, string userName, int defaultBranchId)
+    public (string Token, string Jti, DateTimeOffset ExpiresAt) IssueAccessToken(int userId, string userName, int defaultBranchId, int defCounterId)
     {
         var jti = Guid.NewGuid().ToString("N");
         var now = _clock.UtcNow;
@@ -34,7 +34,8 @@ public sealed class JwtTokenService : IJwtTokenService
             new Claim(JwtRegisteredClaimNames.Jti, jti),
             new Claim(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
             new Claim(ClaimTypes.Name, userName ?? string.Empty),
-            new Claim("def_branch", defaultBranchId.ToString())
+            new Claim("def_branch", defaultBranchId.ToString()),
+            new Claim("def_counter", defCounterId.ToString())
         };
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.AccessSecret));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);

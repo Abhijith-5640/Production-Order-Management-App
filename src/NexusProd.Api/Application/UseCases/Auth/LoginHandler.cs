@@ -6,7 +6,7 @@ using NexusProd.Api.Domain.Entities;
 namespace NexusProd.Api.Application.UseCases.Auth;
 
 public sealed record LoginCommand(string Username, string Password);
-public sealed record LoginResult(string AccessToken, DateTimeOffset AccessExpiresAt, string User, int UserId, int UserBrnchId);
+public sealed record LoginResult(string AccessToken, DateTimeOffset AccessExpiresAt, string User, int UserId, int UserBrnchId, int UserCounterId);
 
 /// <summary>
 /// Authenticates a user. Falls back to the legacy plain-text password
@@ -64,7 +64,7 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
 
         if (!ok) return Error.Unauthorized("Invalid credentials");
 
-        var (accessToken, _, accessExpires) = _jwt.IssueAccessToken(user.Id, user.UserName, user.UserBrnchId);
+        var (accessToken, _, accessExpires) = _jwt.IssueAccessToken(user.Id, user.UserName, user.UserBrnchId, user.UserCounterId);
         var (refreshToken, refreshJti, refreshExpires) = _jwt.IssueRefreshToken(user.Id);
 
         try
@@ -81,6 +81,6 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
         // it as an httpOnly cookie. The access token goes in the JSON body.
         _ = refreshToken; // cookie set in API layer
 
-        return new LoginResult(accessToken, accessExpires, user.UserName, user.Id, user.UserBrnchId);
+        return new LoginResult(accessToken, accessExpires, user.UserName, user.Id, user.UserBrnchId, user.UserCounterId);
     }
 }

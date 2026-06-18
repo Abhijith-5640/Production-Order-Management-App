@@ -21,6 +21,7 @@ const Login = () => {
             localStorage.removeItem('nexus_user');
             localStorage.removeItem('nexus_user_id');
             localStorage.removeItem('nexus_user_brnch_id');
+            localStorage.removeItem('nexus_user_counter_id');
         }
         // Load config on mount
         const savedConfig = JSON.parse(localStorage.getItem('db_config') || '{}');
@@ -50,6 +51,7 @@ const Login = () => {
                 localStorage.setItem('nexus_user', result.user);
                 localStorage.setItem('nexus_user_id', String(result.userId));
                 localStorage.setItem('nexus_user_brnch_id', String(result.userBrnchId));
+                localStorage.setItem('nexus_user_counter_id', String(result.userCounterId));
                 toast.success('Login Successful!');
                 setTimeout(() => {
                     setLoading({ state: false, text: '' });

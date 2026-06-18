@@ -78,7 +78,7 @@ public sealed class RefreshHandler : IHandler<RefreshCommand, RefreshResult>
             return Error.DatabaseError(ex.Message);
         }
 
-        var (newAccess, _, newAccessExp) = _jwt.IssueAccessToken(userId.Value, string.Empty, 0);
+        var (newAccess, _, newAccessExp) = _jwt.IssueAccessToken(userId.Value, string.Empty, 0, 0); // placeholder no-op
         var (_, newRefreshJti, newRefreshExp) = _jwt.IssueRefreshToken(userId.Value);
         try
         {

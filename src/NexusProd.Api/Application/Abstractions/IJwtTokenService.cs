@@ -6,7 +6,7 @@ namespace NexusProd.Api.Application.Abstractions;
 public interface IJwtTokenService
 {
     /// <summary>Builds a short-lived access token (default 15 min).</summary>
-    (string Token, string Jti, DateTimeOffset ExpiresAt) IssueAccessToken(int userId, string userName, int defaultBranchId);
+    (string Token, string Jti, DateTimeOffset ExpiresAt) IssueAccessToken(int userId, string userName, int defaultBranchId, int defCounterId);
 
     /// <summary>Builds a long-lived refresh token (default 7 days).</summary>
     (string Token, string Jti, DateTimeOffset ExpiresAt) IssueRefreshToken(int userId);

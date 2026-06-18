@@ -67,8 +67,8 @@ export const api = {
 
     checkPendingOrders: async (BrnchId) => request(`/orders/check-pending?brnchId=${encodeURIComponent(BrnchId)}`),
 
-    generateInvoices: async (userId) => request('/orders/generate', {
+    generateInvoices: async (userId, brnchId, userCounterId) => request('/orders/generate', {
         method: 'POST',
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({ userId, brnchId, userCounterId }),
     }),
 };

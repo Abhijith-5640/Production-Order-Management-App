@@ -48,7 +48,7 @@ public static class AuthEndpoints
                     Expires = DateTimeOffset.UtcNow.AddDays(jwtOptions.Value.RefreshTokenLifetimeDays)
                 });
                 await Task.CompletedTask;
-                return Results.Ok(new LoginResponse(login.AccessToken, login.AccessExpiresAt, login.User, login.UserId, login.UserBrnchId));
+                return Results.Ok(new LoginResponse(login.AccessToken, login.AccessExpiresAt, login.User, login.UserId, login.UserBrnchId, login.UserCounterId));
             });
         }).AllowAnonymous();
 

@@ -19,7 +19,7 @@ public static class OrderEndpoints
 
         group.MapPost("/generate", async (GenerateInvoicesRequest req, IHandler<GenerateInvoicesCommand, GenerateInvoicesResult> h, CancellationToken ct) =>
         {
-            var r = await h.HandleAsync(new GenerateInvoicesCommand(req.UserId), ct);
+            var r = await h.HandleAsync(new GenerateInvoicesCommand(req.UserId, req.BrnchId, req.UserCounterId), ct);
             return r.ToHttp(g => Results.Ok(new GenerateInvoicesResponse(true, g.Message, g.InvoiceCount)));
         });
 
@@ -34,12 +34,12 @@ public static class OrderEndpoints
             var dist = req.NewDistribution
                 .Select(d => new Domain.Entities.DistributionEntry
                 {
-                    PurSaleId   = d.PurSaleId,
+                    PurSaleId = d.PurSaleId,
                     StockMastId = d.StockMastId,
                     OriginalQty = d.OriginalQty,
-                    Branch      = d.Branch,
-                    Trip        = req.Trip,
-                    Qty         = d.Qty,
+                    Branch = d.Branch,
+                    Trip = req.Trip,
+                    Qty = d.Qty,
                 })
                 .ToList();
             var r = await h.HandleAsync(new UpdateInvoiceCommand(req.ItemId, req.Trip, dist), ct);

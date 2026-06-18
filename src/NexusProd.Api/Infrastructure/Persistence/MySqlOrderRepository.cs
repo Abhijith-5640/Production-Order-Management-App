@@ -50,14 +50,60 @@ public sealed class MySqlOrderRepository : IOrderRepository
         }
     }
 
-    public async Task<int> GenerateInvoicesAsync(int userId, CancellationToken cancellationToken)
+    public async Task<int> GenerateInvoicesAsync(int userId, int brnchId, int userCounterId, CancellationToken cancellationToken)
     {
+        // (0) precheck — short-circuit when the source set is empty so the
+        // happy path doesn't pay for a transaction it won't use.
         await using var conn = await _factory.OpenAsync(cancellationToken);
+        const string precheckSql = @"
+             SELECT COUNT(*)
+             FROM   INV21085
+             WHERE  stats IN ('D','O')
+             AND  IFNULL(is_billed,  0) = 0
+             AND  IFNULL(is_exclude, 0) = 0
+             AND  CAST(dt AS DATE) = CASE stats
+                                                WHEN 'D' THEN CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
+                                                ELSE CAST(NOW() AS DATE)
+                                     END;";
+        var hasAny = await conn.ExecuteScalarAsync<long>(new CommandDefinition(
+            precheckSql, cancellationToken: cancellationToken));
+        if (hasAny == 0) return 0;
+
+        // (1) env lookups — read-only, no transaction. Looked up by userId /
+        // system so the request body doesn't need to carry them.
+        var v_zeroTaxId = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
+            "SELECT tax_id FROM INV21001 WHERE tax_per = 0 LIMIT 1;",
+            cancellationToken: cancellationToken)) ?? 0;
+        var v_taxKey = await conn.ExecuteScalarAsync<string?>(new CommandDefinition(
+            "SELECT tax_key FROM ctge1165 LIMIT 1;",
+            cancellationToken: cancellationToken)) ?? string.Empty;
+        var v_curDate = await conn.ExecuteScalarAsync<DateTime?>(new CommandDefinition(
+            "SELECT getAdjustTime();",
+            cancellationToken: cancellationToken));
+        var v_finyear = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
+            @"SELECT finyear_id FROM ctge1160
+              WHERE CAST(IFNULL(@curDate, NOW()) AS DATE) BETWEEN from_date AND to_date
+              LIMIT 1;",
+            new { curDate = v_curDate },
+            cancellationToken: cancellationToken));
+
+
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
         try
         {
-            var groups = (await conn.QueryAsync<(int branch_id, int trip_id)>(new CommandDefinition(
-                "SELECT DISTINCT branch_id, trip_id FROM order_distribution WHERE inv_gen = 0",
+            // (2) worklist — distinct (brnch_id, trip_no) groups over the
+            // same source filter the precheck used.
+            var groups = (await conn.QueryAsync<BillGroupRow>(new CommandDefinition(
+                @"SELECT DISTINCT brnch_id AS BrnchId, trip_no AS TripNo
+                  FROM   INV21085
+                  WHERE  entry_type IN ('D','O')
+                    AND  IFNULL(is_billed,  0) = 0
+                    AND  IFNULL(is_exclude, 0) = 0
+                    AND  CAST(dt AS DATE) = CASE entry_type
+                                              WHEN 'D' THEN CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
+                                              ELSE CAST(NOW() AS DATE)
+                                            END
+                  ORDER BY brnch_id, trip_no;",
                 transaction: tx, cancellationToken: cancellationToken))).ToList();
 
             if (groups.Count == 0)
@@ -66,55 +112,541 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 return 0;
             }
 
-            var maxNo = await conn.ExecuteScalarAsync<long?>(new CommandDefinition(
-                "SELECT COALESCE(MAX(invoice_no), 0) FROM sales_master",
-                transaction: tx, cancellationToken: cancellationToken)) ?? 0;
-
-            foreach (var (branchId, tripId) in groups)
+            int processed = 0;
+            foreach (var g in groups)
             {
-                var items = (await conn.QueryAsync<(int item_id, int qty, decimal price)>(new CommandDefinition(
-                    @"SELECT od.item_id, od.qty, i.price
-                      FROM order_distribution od
-                      JOIN items i ON od.item_id = i.item_id
-                      WHERE od.branch_id = @branchId AND od.trip_id = @tripId AND od.inv_gen = 0",
-                    new { branchId, tripId }, transaction: tx, cancellationToken: cancellationToken))).ToList();
+
+                var PrdtTemplts = await conn.QuerySingleOrDefaultAsync<TempltSetRow>(new CommandDefinition(
+                    @"SELECT  bt.prod_tmplt_id                       AS ProdTmpltId,
+                              bt.selling_brnch_id                    AS SellingBrnchId,
+                              bt.purchase_brnch_id                   AS PurchaseBrnchId,
+                              bt.selling_ledger_id                   AS SellingLedgerId,
+                              bt.purchase_ledger_id                  AS PurchaseLedgerId,
+                              CAST(IFNULL(bt.is_transfer, 0) AS BIT) AS IsTransfer
+                      FROM    INV21100 bt
+                      WHERE   bt.selling_brnch_id = @sellingBrnchId 
+                      AND bt.purchase_brnch_id = @brnchId
+                      LIMIT 1;",
+                    new
+                    {
+                        sellingBrnchId = brnchId,
+                        brnchId = g.BrnchId,
+                    },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                if (PrdtTemplts is null) continue;
+
+                var BillNoConfigs = await conn.QuerySingleOrDefaultAsync<BillNoSettingsRow>(new CommandDefinition(
+                    @"SELECT bill_no_prfx                                   BillNoPrfx,
+							 auth_no AS                                     AuthNo,
+							 delim                                          Delim,
+							 ts.tariff_id                                   TariffId,
+							 ts.pay_type_id                                 PayTypeId,
+							 cs.counter_setings_id                          CounterSettingsId,
+                              CAST(IFNULL(tf.is_exlusive_tax, 0) AS BIT)    Exclusive
+					FROM inv21075 ts
+					JOIN inv21033 cvs ON cvs.vou_typ_id = ts.vou_typ_id
+					JOIN inv21032 cs ON cs.cashier_usr_id = @userId
+					JOIN inv21070 tf ON tf.tariff_id = ts.tariff_id
+					WHERE cvs.is_primary = 1
+                    AND cvs.counter_id= @counterId
+					AND cvs.vou_typ_id = @vouTypId
+					AND cvs.brnch_id= @sellingBrnchId
+					AND ts.ledger_id= @sellingLedgerId;",
+                    new
+                    {
+                        userId = userId,
+                        counterId = userCounterId,
+                        vouTypId = 10,
+                        sellingBrnchId = PrdtTemplts.SellingBrnchId,
+                        sellingLedgerId = PrdtTemplts.SellingLedgerId,
+                    },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                if (BillNoConfigs is null) continue;
+
+                if (!PrdtTemplts.IsTransfer)
+                {
+                    var sql = @"
+                    
+                        SELECT vehicle_name AS VehicleName,
+                             driver_name AS DriverName
+                        FROM inv31175
+                        WHERE  other_branch_id = @PurBrnchId
+                        AND trip_id=@tripId
+                        AND  duty_date BETWEEN @frmDate AND @toDate;
+
+                        SET @v_billno = (
+                                            SELECT MAX(bill_no) + 1
+                                            FROM inv31065 s
+                                            WHERE s.vou_typ_id IN (
+                                                SELECT cvs.vou_typ_id
+                                                FROM inv21075 ts
+                                                JOIN inv21033 cvs ON cvs.vou_typ_id = ts.vou_typ_id
+                                                WHERE cvs.counter_id = @counterId
+                                                  AND cvs.is_primary = 1
+                                                  AND ts.ledger_id = @sellingLedgerId
+                                                  AND cvs.brnch_id = @sellingBrnchId
+                                            )
+                                            AND s.finyear_id = @finyearId
+                                            AND s.brnch_id = @sellingBrnchId
+                                            AND IFNULL(s.bill_prfx, '') = IFNULL(@billPrfx, '')
+                                        );
+                                    
+                        SET @v_billno = IF(@v_billno IS NULL OR @v_billno <= 0,
+                                            (SELECT bill_no + 1
+                                             FROM last_bill lb
+                                             WHERE lb.prfx = @billPrfx
+                                               AND lb.is_primary = 1
+                                               AND lb.finyear_id = @finyearId
+                                               AND lb.vou_typ_id = @vouTypId
+                                             LIMIT 1),
+                                            @v_billno);
+                                    
+                        UPDATE last_bill AS lb
+                        SET lb.bill_no = @v_billno
+                        WHERE lb.prfx = @billPrfx
+                        AND lb.is_primary = 1
+                        AND lb.finyear_id = @finyearId
+                        AND lb.vou_typ_id = @vouTypId;
+                                    
+                        SELECT @v_billno;
+
+                        END IF;
+                    ";
+
+                    using var VehicleAndBillNoFetch = await conn.QueryMultipleAsync(new CommandDefinition(
+                    sql,
+                    new
+                    {
+                        PurBrnchId = g.BrnchId,
+                        tripId = g.TripNo,
+                        frmDate = v_curDate?.Date,
+                        toDate = v_curDate?.AddDays(1).AddSeconds(-1),
+                        counterId = userCounterId,
+                        sellingLedgerId = PrdtTemplts.SellingLedgerId,
+                        sellingBrnchId = PrdtTemplts.SellingBrnchId,
+                        finyearId = v_finyear,
+                        billPrfx = BillNoConfigs.BillNoPrfx,
+                        vouTypId = 10
+                    },
+                    transaction: tx,
+                    cancellationToken: cancellationToken));
+
+                    var VehicleDtls = await VehicleAndBillNoFetch.ReadSingleOrDefaultAsync<VehicleDetailRow>();
+                    var v_billNo = await VehicleAndBillNoFetch.ReadFirstOrDefaultAsync<long?>() ?? 1L;
+
+                    if (v_billNo <= 0)
+                    {
+                        v_billNo = await VehicleAndBillNoFetch.ReadFirstOrDefaultAsync<long?>() ?? 1L;
+                    }
+
+                    if (v_billNo <= 0)
+                    {
+                        v_billNo = await conn.ExecuteScalarAsync<long?>(new CommandDefinition(
+                        @"select bill_no+1
+				        INTO v_billno
+				        from last_bill lb
+				        WHERE lb.prfx = v_blprfx
+				        and lb.is_primary = 1
+				        and lb.finyear_id = v_finyear
+				        and lb.vou_typ_id=v_vou_typ_id
+				        LIMIT 1;",
+                        new
+                        {
+                            billPrfx = BillNoConfigs.BillNoPrfx,
+                            finyearId = v_finyear,
+                            vou_typ_id = 10,
+                        },
+                        transaction: tx, cancellationToken: cancellationToken)) ?? 1L;
+                    }
+                    ;
+
+                    if (v_billNo > 0)
+                    {
+
+                    }
+                    ;
+                }
+                else
+                {
+
+                    var v_billNo = await conn.ExecuteScalarAsync<long?>(new CommandDefinition(
+                    @"SELECT COALESCE(MAX(bill_no), 0) + 1 FROM inv31065bsd
+                    WHERE vou_typ_id = @vouTypId
+                    AND finyear_id = @finyearId
+                    AND brnch_id   = @sellingBrnchId
+                    AND IFNULL(bill_prfx,'') = IFNULL(@billPrfx,'');",
+                    new
+                    {
+                        vouTypId = 10,
+                        finyearId = v_finyear,
+                        sellingBrnchId = BillSettingsConfigs.SellingBrnchId,
+                        billPrfx = BillSettingsConfigs.BillNoPrfx,
+                    },
+                    transaction: tx, cancellationToken: cancellationToken)) ?? 1L;
+
+                    if (v_billNo <= 0) v_billNo = 1;
+
+
+                }
+
+
+
+                if (cfg is null) continue;
+
+                var isTransfer = cfg.IsTransfer != 0;
+                var masterTbl = isTransfer ? "INV31065BSD" : "INV31065";
+                var detailTbl = isTransfer ? "INV31066BSD" : "INV31066";
+                var isExclusive = cfg.Exclusive ?? 0;
+                var isExTax = isExclusive; // mirrors the procedure: ex_tax == exclusive
+                var tariffId = cfg.TariffId ?? 0;
+                var payTypeId = cfg.PayTypeId ?? 0;
+                var counterSet = cfg.CounterSettingsId ?? 0;
+                var salesDate = cfg.SalesDate ?? v_curDate ?? DateTime.Now;
+
+                // (4b) items into in-memory list (replaces tBillItemtemp).
+                var items = (await conn.QueryAsync<BillItemRow>(new CommandDefinition(
+                    @"SELECT s.stock_mast_id   AS StockMastId,
+                             u.unit_id         AS UnitId,
+                             CASE WHEN IFNULL(o.edit_qty, 0) > 0 THEN o.edit_qty
+                                  ELSE o.qty END        AS Qty,
+                             r.sale_rate       AS SalesRate,
+                             t.tax_id          AS TaxId,
+                             IFNULL(t.tax_per, 0)     AS TaxPer,
+                             0                 AS TaxAmt,
+                             tc.tax_id         AS CessId,
+                             IFNULL(tc.tax_per, 0)    AS CessPer,
+                             0                 AS CgstPer,
+                             0                 AS SgstPer,
+                             r.base_rate       AS BaseRate
+                      FROM   INV21085 o
+                      JOIN   inv21010 i   ON i.itm_mast_id = o.itm_mast_id
+                      JOIN   inv21050 s   ON s.itm_mast_id = i.itm_mast_id
+                      JOIN   inv21001 t   ON t.tax_id      = i.tax_id
+                      JOIN   inv21071 r   ON r.stock_mast_id = s.stock_mast_id
+                      JOIN   inv00000 u   ON u.unit_id     = r.unit_id
+                      JOIN   inv21070 tf  ON tf.tariff_id  = r.tariff_id
+                      LEFT  JOIN inv21011 il ON il.itm_mast_id = i.itm_mast_id
+                                                 AND il.lang_id = 1
+                      LEFT  JOIN inv21001 tc ON tc.tax_id    = i.cess_tax_id
+                      WHERE  s.brnch_id  = @sellingBrnchId
+                        AND  tf.tariff_id = @tariffId
+                        AND  r.stat       = 1
+                        AND  i.stats      = 1
+                        AND  s.stats      = 1
+                        AND  r.sale_rate  > 0
+                        AND  IFNULL(o.is_billed,  0) = 0
+                        AND  IFNULL(o.is_exclude, 0) = 0
+                        AND  o.brnch_id  = @brnchId
+                        AND  o.trip_no   = @tripNo
+                        AND  o.entry_type IN ('D','O')
+                        AND  CAST(o.dt AS DATE) = CASE o.entry_type
+                                                    WHEN 'D' THEN CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
+                                                    ELSE CAST(NOW() AS DATE)
+                                                  END;",
+                    new
+                    {
+                        sellingBrnchId = cfg.SellingBrnchId,
+                        tariffId,
+                        brnchId = g.BrnchId,
+                        tripNo = g.TripNo,
+                    },
+                    transaction: tx, cancellationToken: cancellationToken))).ToList();
 
                 if (items.Count == 0) continue;
 
-                decimal totalValue = 0;
-                foreach (var (_, qty, price) in items)
-                    totalValue += price * qty;
 
-                maxNo++;
-                var salesMasterId = await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-                    @"INSERT INTO sales_master (branch_id, invoice_prefix, invoice_no, invoice_date, total_value, created_user, trip_id)
-                      VALUES (@branchId, 'INV', @invoiceNo, NOW(), @totalValue, @userId, @tripId);
-                      SELECT LAST_INSERT_ID();",
-                    new { branchId, invoiceNo = maxNo, totalValue, userId, tripId },
+                // (4d) master insert + LAST_INSERT_ID. The two statements are
+                // batched by MySqlConnector, so this is one round trip.
+                var salesMastId = await conn.ExecuteScalarAsync<long>(new CommandDefinition(
+                    $@"INSERT INTO {masterTbl}
+                        (tariff_id, bill_prfx, delim, bill_no, auth_no, sales_date,
+                         sales_ledger_id, pay_type_id, brnch_id, finyear_id, vou_typ_id,
+                         cashier_id, counter_settings_id, tot_grs_amt, tot_tax_amt,
+                         grand_total, is_ex_tax, descr, edit_stats, is_uploaded,
+                         is_primary, cgst_tot, sgst_tot, cess_tot, tax_type_id,
+                         is_branch_sale, tot_discount,
+                         trnspt_mode, trnspt_doc_date, vehicle_no, driver_name,
+                         round_off, is_changed_credit, counter_id)
+                        VALUES
+                        (@tariffId, @billPrfx, @delim, @billNo, @authNo, @salesDate,
+                         @sellingLedgerId, @payTypeId, @sellingBrnchId, @finyearId, @vouTypId,
+                         @userId, @counterSettingsId, 0, 0, 0, @isExTax, 'Bulk Bill Generation',
+                         0, 0, 1, 0, 0, 0, @taxTypeId, 1, 0,
+                         @trnsptMode, CAST(@salesDate AS DATE), @vehicleNo, @driverName,
+                         0, 0, @counterId);
+                        SELECT LAST_INSERT_ID();",
+                    new
+                    {
+                        tariffId,
+                        billPrfx = cfg.BillNoPrfx,
+                        delim = cfg.Delim,
+                        billNo = v_billNo,
+                        authNo = cfg.AuthNo,
+                        salesDate,
+                        sellingLedgerId = cfg.SellingLedgerId,
+                        payTypeId,
+                        sellingBrnchId = cfg.SellingBrnchId,
+                        finyearId = v_finyear,
+                        vouTypId = 10,
+                        userId,
+                        counterSettingsId = counterSet,
+                        isExTax,
+                        taxTypeId = (v_taxKey == "GST") ? 3 : 1,
+                        trnsptMode = "1",
+                        vehicleNo = (string?)null,
+                        driverName = (string?)null,
+                        counterId = userCounterId,
+                    },
                     transaction: tx, cancellationToken: cancellationToken));
 
-                foreach (var (itemId, qty, price) in items)
+                // (4e) detail bulk insert — one multi-row VALUES per group.
+                // Mirrors the procedure's `INSERT INTO inv31066 SELECT ... FROM tBillItemtemp`.
+                // The CASE block in 4h overwrites tax/total amounts; the initial
+                // values are simply Qty*SalesRate for grs_amt.
+                var valueTuples = string.Join(",", items.Select((_, idx) =>
+                    $"(@sm{idx}, @stockMastId{idx}, @unitId{idx}, @qty{idx}, @salesRate{idx}, " +
+                    $"@taxId{idx}, @taxPer{idx}, @grsAmt{idx}, 0, 0, " +
+                    $"@cessId{idx}, @cessPer{idx}, @baseRate{idx})"));
+                var detailParams = new DynamicParameters();
+                detailParams.Add("sm", salesMastId);
+                for (int i = 0; i < items.Count; i++)
                 {
-                    var totalItem = price * qty;
-                    await conn.ExecuteAsync(new CommandDefinition(
-                        @"INSERT INTO sales_details (sales_master_id, item_id, price, qty, total)
-                          VALUES (@salesMasterId, @itemId, @price, @qty, @total)",
-                        new { salesMasterId, itemId, price, qty, total = totalItem },
+                    var it = items[i];
+                    detailParams.Add($"sm{i}", salesMastId);
+                    detailParams.Add($"stockMastId{i}", it.StockMastId);
+                    detailParams.Add($"unitId{i}", it.UnitId);
+                    detailParams.Add($"qty{i}", it.Qty);
+                    detailParams.Add($"salesRate{i}", it.SalesRate);
+                    detailParams.Add($"taxId{i}", it.TaxId);
+                    detailParams.Add($"taxPer{i}", it.TaxPer);
+                    detailParams.Add($"grsAmt{i}", Math.Round(it.Qty * it.SalesRate, 3));
+                    detailParams.Add($"cessId{i}", it.CessId);
+                    detailParams.Add($"cessPer{i}", it.CessPer);
+                    detailParams.Add($"baseRate{i}", it.BaseRate);
+                }
+                await conn.ExecuteAsync(new CommandDefinition(
+                    $@"INSERT INTO {detailTbl}
+                       (sales_mast_id, stock_mast_id, unit_id, sales_qty, sales_rate,
+                        tax_id, tax_per, grs_amt, tax_amt, tot_amt,
+                        cess_id, cess_per, base_rate)
+                       VALUES {valueTuples};",
+                    detailParams,
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                // (4f) totals — four round trips, mirroring the procedure.
+                decimal v_total;
+                if (v_taxKey == "GST")
+                {
+                    v_total = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
+                        $@"SELECT ROUND(COALESCE(SUM(
+                            (sales_qty*IFNULL(sales_rate, 0)*IFNULL(tax_per,0)/100)
+                          + (sales_qty*IFNULL(sales_rate, 0))), 0), 3)
+                          FROM   {detailTbl} d
+                          JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
+                          JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
+                          JOIN   inv21001 t ON t.tax_id       = i.tax_id
+                          WHERE  d.sales_mast_id = @sm;",
+                        new { sm = salesMastId },
+                        transaction: tx, cancellationToken: cancellationToken));
+                }
+                else
+                {
+                    v_total = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
+                        $@"SELECT ROUND(COALESCE(SUM(
+                            CASE WHEN @isExclusive = 1
+                                 THEN (sales_qty*IFNULL(sales_rate, 0)*IFNULL(tax_per,0)/100)
+                                    + (sales_qty*IFNULL(sales_rate, 0))
+                                 ELSE sales_qty*IFNULL(sales_rate, 0) END), 0), 3)
+                          FROM   {detailTbl} d
+                          JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
+                          JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
+                          JOIN   inv21001 t ON t.tax_id       = i.tax_id
+                          WHERE  d.sales_mast_id = @sm;",
+                        new { sm = salesMastId, isExclusive },
                         transaction: tx, cancellationToken: cancellationToken));
                 }
 
-                await conn.ExecuteAsync(new CommandDefinition(
-                    "UPDATE order_distribution SET inv_gen = 1 WHERE branch_id = @branchId AND trip_id = @tripId AND inv_gen = 0",
-                    new { branchId, tripId },
+                decimal v_cgstTot = 0m, v_sgstTot = 0m, v_cessTot = 0m, v_grsTot = 0m;
+                if (v_taxKey == "GST")
+                {
+                    v_cgstTot = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
+                        $@"SELECT ROUND(COALESCE(SUM(
+                            sales_qty*IFNULL(sales_rate, 0)*(IFNULL(t.tax_per,0)/2)/100), 0), 3)
+                          FROM   {detailTbl} d
+                          JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
+                          JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
+                          JOIN   inv21001 t ON t.tax_id       = i.tax_id
+                          WHERE  d.sales_mast_id = @sm;",
+                        new { sm = salesMastId },
+                        transaction: tx, cancellationToken: cancellationToken));
+                    v_sgstTot = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
+                        $@"SELECT ROUND(COALESCE(SUM(
+                            sales_qty*IFNULL(sales_rate, 0)*(IFNULL(t.tax_per,0)/2)/100), 0), 3)
+                          FROM   {detailTbl} d
+                          JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
+                          JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
+                          JOIN   inv21001 t ON t.tax_id       = i.tax_id
+                          WHERE  d.sales_mast_id = @sm;",
+                        new { sm = salesMastId },
+                        transaction: tx, cancellationToken: cancellationToken));
+                    v_cessTot = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
+                        $@"SELECT ROUND(COALESCE(SUM(
+                            sales_qty*IFNULL(sales_rate, 0)*IFNULL(ct.tax_per,0)/100), 0), 3)
+                          FROM   {detailTbl} d
+                          JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
+                          JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
+                          JOIN   inv21001 ct ON ct.tax_id    = i.cess_tax_id
+                          WHERE  d.sales_mast_id = @sm;",
+                        new { sm = salesMastId },
+                        transaction: tx, cancellationToken: cancellationToken));
+                }
+
+                v_grsTot = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
+                    $@"SELECT ROUND(COALESCE(SUM(
+                        CASE WHEN @isExclusive = 1
+                             THEN sales_qty*IFNULL(sales_rate, 0)
+                             ELSE (sales_qty*IFNULL(sales_rate, 0) * 100)
+                                / (100 + IFNULL(t.tax_per, 0) + IFNULL(ct.tax_per, 0)) END), 0), 3)
+                      FROM   {detailTbl} d
+                      JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
+                      JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
+                      JOIN   inv21001 t ON t.tax_id       = i.tax_id
+                      LEFT  JOIN inv21001 ct ON ct.tax_id  = i.cess_tax_id
+                      WHERE  d.sales_mast_id = @sm;",
+                    new { sm = salesMastId, isExclusive },
                     transaction: tx, cancellationToken: cancellationToken));
+
+                var v_totalTax = v_total - v_grsTot;
+
+                // (4g) master totals UPDATE.
+                await conn.ExecuteAsync(new CommandDefinition(
+                    $@"UPDATE {masterTbl}
+                        SET    grand_total  = @vTotal,
+                               tot_tax_amt  = @vTotalTax,
+                               cgst_tot     = @vCgstTot,
+                               sgst_tot     = @vSgstTot,
+                               cess_tot     = @vCessTot,
+                               tot_grs_amt  = @vGrsTot,
+                               tax_type_id  = @taxTypeId
+                        WHERE  sales_mast_id = @sm;",
+                    new
+                    {
+                        vTotal = v_total,
+                        vTotalTax = v_totalTax,
+                        vCgstTot = v_cgstTot,
+                        vSgstTot = v_sgstTot,
+                        vCessTot = v_cessTot,
+                        vGrsTot = v_grsTot,
+                        taxTypeId = (v_taxKey == "GST") ? 3 : 1,
+                        sm = salesMastId,
+                    },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                // (4h) detail CASE UPDATE — the big per-row recompute. Mirrors
+                // the procedure verbatim.
+                await conn.ExecuteAsync(new CommandDefinition(
+                    $@"UPDATE {detailTbl} d
+                        JOIN   inv21050 s  ON s.stock_mast_id = d.stock_mast_id
+                        JOIN   inv21010 i  ON i.itm_mast_id   = s.itm_mast_id
+                        JOIN   inv21001 t  ON t.tax_id        = i.tax_id
+                        LEFT  JOIN inv21001 ct ON ct.tax_id    = i.cess_tax_id
+                        SET    d.tot_amt = ROUND((
+                                    CASE WHEN @isExclusive = 1
+                                         THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(t.tax_per,0)/100)
+                                            + (d.sales_qty*IFNULL(d.sales_rate, 0))
+                                         ELSE d.sales_qty*IFNULL(d.sales_rate, 0) END), 3),
+                               d.tax_amt = ROUND((
+                                    CASE WHEN @isExclusive = 1
+                                         THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(t.tax_per,0)/100)
+                                         ELSE (d.grs_amt
+                                              - ((d.sales_qty*IFNULL(d.sales_rate, 0))*100)
+                                                 / (100 + IFNULL(t.tax_per, 0) + IFNULL(ct.tax_per, 0))) END), 3),
+                               d.cess_id  = CASE WHEN @taxKey = 'GST'
+                                                  THEN IFNULL(i.cess_tax_id, @zeroTaxId)
+                                                  ELSE NULL END,
+                               d.cess_per = CASE WHEN @taxKey = 'GST'
+                                                  THEN IFNULL(ct.tax_per, NULL)
+                                                  ELSE NULL END,
+                               d.cess_amt = CASE WHEN @taxKey = 'GST'
+                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(ct.tax_per, 0)/100)
+                                                  ELSE NULL END,
+                               d.cgst_per = CASE WHEN @taxKey = 'GST'
+                                                  THEN (IFNULL(t.tax_per, 0) / 2)
+                                                  ELSE NULL END,
+                               d.cgst_amt = CASE WHEN @taxKey = 'GST'
+                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*(IFNULL(t.tax_per, 0)/2)/100)
+                                                  ELSE NULL END,
+                               d.sgst_per = CASE WHEN @taxKey = 'GST'
+                                                  THEN (IFNULL(t.tax_per, 0) / 2)
+                                                  ELSE NULL END,
+                               d.sgst_amt = CASE WHEN @taxKey = 'GST'
+                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*(IFNULL(t.tax_per, 0)/2)/100)
+                                                  ELSE NULL END,
+                               d.grs_amt = ROUND((
+                                    CASE WHEN @isExclusive = 1
+                                         THEN d.sales_qty*IFNULL(d.sales_rate, 0)
+                                         ELSE (d.sales_qty*IFNULL(d.sales_rate, 0)*100)
+                                            / (100 + IFNULL(t.tax_per, 0) + IFNULL(ct.tax_per, 0)) END), 3)
+                        WHERE  d.sales_mast_id = @sm;",
+                    new
+                    {
+                        isExclusive,
+                        taxKey = v_taxKey,
+                        zeroTaxId = v_zeroTaxId,
+                        sm = salesMastId,
+                    },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                // (4i) BS row — the procedure's universal join row.
+                await conn.ExecuteAsync(new CommandDefinition(
+                    @"INSERT INTO INV31065BS
+                        (trip_no, sale_brnch_id, sale_acc_ledger_id, pur_brnch_id, pur_acc_ledger_id,
+                         brnch_id, usr_id, pur_template_id, is_for_transfer, sales_mast_id, createdDt)
+                        VALUES
+                        (@tripNo, @sellingBrnchId, @sellingLedgerId, @purchaseBrnchId, @purchaseLedgerId,
+                         @brnchId, @userId, @prodTmpltId, @isTransfer, @salesMastId, NOW());",
+                    new
+                    {
+                        tripNo = g.TripNo,
+                        sellingBrnchId = cfg.SellingBrnchId,
+                        sellingLedgerId = cfg.SellingLedgerId,
+                        purchaseBrnchId = g.BrnchId,
+                        purchaseLedgerId = cfg.PurchaseLedgerId,
+                        brnchId = g.BrnchId,
+                        userId,
+                        prodTmpltId = cfg.ProdTmpltId ?? 0,
+                        isTransfer,
+                        salesMastId,
+                    },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                // (4j) INV21085 flag — matches the source filter the precheck used.
+                await conn.ExecuteAsync(new CommandDefinition(
+                    @"UPDATE INV21085
+                        SET    is_billed = 1
+                        WHERE  brnch_id  = @brnchId
+                          AND  trip_no   = @tripNo
+                          AND  entry_type IN ('D','O')
+                          AND  IFNULL(is_billed,  0) = 0
+                          AND  IFNULL(is_exclude, 0) = 0
+                          AND  CAST(dt AS DATE) = CASE entry_type
+                                                    WHEN 'D' THEN CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
+                                                    ELSE CAST(NOW() AS DATE)
+                                                  END;",
+                    new { brnchId = g.BrnchId, tripNo = g.TripNo },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                processed++;
             }
 
             await tx.CommitAsync(cancellationToken);
-            return groups.Count;
+            return processed;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "GenerateInvoicesAsync failed for userId {UserId}", userId);
+            _logger.LogError(ex, "GenerateInvoicesAsync failed for userId {UserId} brnchId {BrnchId}", userId, brnchId);
             await tx.RollbackAsync(cancellationToken);
             throw;
         }
@@ -879,5 +1411,66 @@ public sealed class MySqlOrderRepository : IOrderRepository
         public decimal CessAmt { get; set; }
         public decimal DiscAmt { get; set; }
         public decimal TotAmt { get; set; }
+    }
+
+    // (GenerateInvoicesAsync port) — worklist row.
+    private sealed class BillGroupRow
+    {
+        public int BrnchId { get; set; }
+        public int TripNo { get; set; }
+    }
+
+    // (GenerateInvoicesAsync port) — single LEFT-JOIN row from INV21100 +
+    // the four non-transfer config tables. The four non-transfer columns
+    // come back NULL on transfer rows.
+    private sealed class BillMasterRow
+    {
+        public TempltSetRow? TempltSetMast { get; set; }
+        public BillNoSettingsRow? BillNoSettings { get; set; }
+
+
+    }
+    public sealed class TempltSetRow
+    {
+        public int? ProdTmpltId { get; set; }
+        public int SellingBrnchId { get; set; }
+        public int PurchaseBrnchId { get; set; }
+        public int SellingLedgerId { get; set; }
+        public int PurchaseLedgerId { get; set; }
+        public bool IsTransfer { get; set; }
+    }
+    public sealed class BillNoSettingsRow
+    {
+        public string? BillNoPrfx { get; set; }
+        public string? AuthNo { get; set; }
+        public string? Delim { get; set; }
+        public int? TariffId { get; set; }
+        public int? PayTypeId { get; set; }
+        public bool Exclusive { get; set; }
+        public DateTime? SalesDate { get; set; }
+        public int? CounterSettingsId { get; set; }
+    }
+    // (GenerateInvoicesAsync port) — in-memory item list. Mirrors the
+    // columns the legacy procedure's tBillItemtemp held.
+    private sealed class BillItemRow
+    {
+        public int StockMastId { get; set; }
+        public int UnitId { get; set; }
+        public decimal Qty { get; set; }
+        public decimal SalesRate { get; set; }
+        public int TaxId { get; set; }
+        public decimal TaxPer { get; set; }
+        public decimal TaxAmt { get; set; }
+        public int CessId { get; set; }
+        public decimal CessPer { get; set; }
+        public decimal CgstPer { get; set; }
+        public decimal SgstPer { get; set; }
+        public decimal BaseRate { get; set; }
+    }
+    private sealed class VehicleDetailRow
+    {
+        public string VehicleNo { get; set; }
+        public string DriverName { get; set; }
+
     }
 }

@@ -4,7 +4,7 @@ using NexusProd.Api.Application.Common;
 
 namespace NexusProd.Api.Application.UseCases.Orders;
 
-public sealed record GenerateInvoicesCommand(int UserId);
+public sealed record GenerateInvoicesCommand(int UserId, int BrnchId, int UserCounterId);
 public sealed record GenerateInvoicesResult(int InvoiceCount, string Message);
 
 public sealed class GenerateInvoicesHandler : IHandler<GenerateInvoicesCommand, GenerateInvoicesResult>
@@ -22,15 +22,15 @@ public sealed class GenerateInvoicesHandler : IHandler<GenerateInvoicesCommand, 
     {
         try
         {
-            var count = await _orders.GenerateInvoicesAsync(request.UserId, cancellationToken);
+            var count = await _orders.GenerateInvoicesAsync(request.UserId, request.BrnchId, request.UserCounterId, cancellationToken);
             var message = count == 0
-                ? "No pending orders to generate"
+                ? "No bills saved yet."
                 : $"{count} invoices generated successfully.";
             return new GenerateInvoicesResult(count, message);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "GenerateInvoices failed for userId {UserId}", request.UserId);
+            _logger.LogError(ex, "GenerateInvoices failed for userId {UserId} brnchId {BrnchId} userCounterId {UserCounterId}", request.UserId, request.BrnchId, request.UserCounterId);
             return Error.DatabaseError("Invoice generation failed: " + ex.Message);
         }
     }
