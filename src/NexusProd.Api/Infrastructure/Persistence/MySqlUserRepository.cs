@@ -57,6 +57,38 @@ public sealed class MySqlUserRepository : IUserRepository
         }
     }
 
+    public async Task<User?> FindByIdAsync(int userId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var conn = await _factory.OpenAsync(cancellationToken);
+
+            // Same shape as FindByUsernameAsync but filtered by primary key.
+            // We keep the join to INV21032 because that's how the cashier
+            // branch/counter claims are resolved in the live schema.
+            const string sql = @"
+                                SELECT
+                                    usr_id             AS Id,
+                                    profile_name       AS UserName,
+                                    def_brnch_id       AS UserBrnchId,
+                                    counter_id         AS UserCounterId,
+                                    TRUE               AS IsActive,
+                                    passwd             AS LegacyPassword,
+                                    passwd             AS PasswordHash
+                                FROM ctge1075
+                                INNER JOIN INV21032 on INV21032.cashier_usr_id = ctge1075.usr_id
+                                WHERE usr_id = @UserId
+                                LIMIT 1";
+            var cmd = new CommandDefinition(sql, new { UserId = userId }, cancellationToken: cancellationToken);
+            return await conn.QuerySingleOrDefaultAsync<User>(cmd);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "FindByIdAsync failed for userId {UserId}", userId);
+            throw;
+        }
+    }
+
     public async Task UpdatePasswordHashAsync(int userId, string hash, CancellationToken cancellationToken)
     {
         try

@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using Microsoft.Extensions.Options;
 using NexusProd.Api.Api.Contracts;
+using NexusProd.Api.Application.Abstractions;
 using NexusProd.Api.Application.Common;
 using NexusProd.Api.Application.UseCases.Auth;
 using NexusProd.Api.Infrastructure.Configuration;
@@ -30,22 +31,18 @@ public static class AuthEndpoints
             return await result.ToHttpAsync(async login =>
             {
                 // The login handler issues both an access and a refresh
-                // token, but to keep the handler pure (no HttpContext) we
-                // re-issue the refresh here so the cookie can carry the
-                // exact value the API layer is about to set. The handler
-                // has already stored the JTI in the refresh store.
-                //
-                // For the POC the cookie value is a synthetic marker that
-                // the client doesn't read — the server-side JTI is what
-                // matters for revocation. We tag the cookie so future
-                // debugging can tell which one is which.
-                ctx.Response.Cookies.Append(jwtOptions.Value.CookieName, "rt:" + login.UserId, new CookieOptions
+                // token. The refresh token is delivered to the browser
+                // via an HttpOnly cookie so JS cannot exfiltrate it; the
+                // access token travels in the JSON body. The JTI of the
+                // refresh token is already stored server-side by the
+                // handler, so a logout or a /refresh can revoke/rotate it.
+                ctx.Response.Cookies.Append(jwtOptions.Value.CookieName, login.RefreshToken, new CookieOptions
                 {
                     HttpOnly = true,
                     Secure = ctx.Request.IsHttps,
                     SameSite = SameSiteMode.Lax,
                     Path = "/",
-                    Expires = DateTimeOffset.UtcNow.AddDays(jwtOptions.Value.RefreshTokenLifetimeDays)
+                    Expires = login.RefreshExpiresAt
                 });
                 await Task.CompletedTask;
                 return Results.Ok(new LoginResponse(login.AccessToken, login.AccessExpiresAt, login.User, login.UserId, login.UserBrnchId, login.UserCounterId));
@@ -61,13 +58,13 @@ public static class AuthEndpoints
             if (!ctx.Request.Cookies.TryGetValue(jwtOptions.Value.CookieName, out var cookieValue) || string.IsNullOrEmpty(cookieValue))
                 return Results.Json(new { success = false, message = "Missing refresh cookie" }, statusCode: StatusCodes.Status401Unauthorized);
 
-            // The cookie value is a marker (rt:<userId>) in this POC —
-            // real refresh tokens are issued on login and stored in the
-            // refresh-store keyed by JTI. The handler validates the JTI
-            // and issues a new access token. A full refresh-token cookie
-            // is left as a follow-up; the marker keeps the round-trip
-            // testable.
-            _ = cookieValue;
+            // The cookie now carries the real refresh JWT issued at login.
+            // The handler validates it, rotates the JTI server-side, and
+            // returns a fresh access token. Note: the rotated refresh
+            // token is NOT written back to the cookie here — clients that
+            // need a rotated cookie should log in again. For the silent-
+            // refresh use case (re-issuing an access token) the access
+            // token alone is enough.
             var command = new RefreshCommand(cookieValue);
             var result = await handler.HandleAsync(command, ct);
             return result.ToHttp(refresh => Results.Ok(new RefreshResponse(refresh.AccessToken, refresh.AccessExpiresAt)));
@@ -76,11 +73,24 @@ public static class AuthEndpoints
         group.MapPost("/logout", async (
             HttpContext ctx,
             IOptions<JwtSettings> jwtOptions,
+            IJwtTokenService jwt,
             IHandler<LogoutCommand, bool> handler,
             CancellationToken ct) =>
         {
             var accessJti = ctx.User.FindFirst(JwtRegisteredClaimNames.Jti)?.Value;
-            var command = new LogoutCommand(RefreshJti: null, AccessJti: accessJti);
+
+            // Server-side refresh revocation: validate the cookie's
+            // refresh JWT and pull out its JTI. The handler will mark it
+            // revoked in the in-memory store, so a stolen-then-logged-out
+            // cookie cannot be silently refreshed.
+            string? refreshJti = null;
+            if (ctx.Request.Cookies.TryGetValue(jwtOptions.Value.CookieName, out var refreshCookie)
+                && !string.IsNullOrEmpty(refreshCookie))
+            {
+                refreshJti = jwt.ValidateRefreshToken(refreshCookie)?.Jti;
+            }
+
+            var command = new LogoutCommand(RefreshJti: refreshJti, AccessJti: accessJti);
             var result = await handler.HandleAsync(command, ct);
 
             ctx.Response.Cookies.Delete(jwtOptions.Value.CookieName, new CookieOptions

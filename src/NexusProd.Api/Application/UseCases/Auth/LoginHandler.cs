@@ -6,7 +6,15 @@ using NexusProd.Api.Domain.Entities;
 namespace NexusProd.Api.Application.UseCases.Auth;
 
 public sealed record LoginCommand(string Username, string Password);
-public sealed record LoginResult(string AccessToken, DateTimeOffset AccessExpiresAt, string User, int UserId, int UserBrnchId, int UserCounterId);
+public sealed record LoginResult(
+    string AccessToken,
+    string RefreshToken,
+    DateTimeOffset AccessExpiresAt,
+    DateTimeOffset RefreshExpiresAt,
+    string User,
+    int UserId,
+    int UserBrnchId,
+    int UserCounterId);
 
 /// <summary>
 /// Authenticates a user. Falls back to the legacy plain-text password
@@ -79,8 +87,14 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
 
         // Note: refreshToken is returned only so the API layer can set
         // it as an httpOnly cookie. The access token goes in the JSON body.
-        _ = refreshToken; // cookie set in API layer
-
-        return new LoginResult(accessToken, accessExpires, user.UserName, user.Id, user.UserBrnchId, user.UserCounterId);
+        return new LoginResult(
+            AccessToken: accessToken,
+            RefreshToken: refreshToken,
+            AccessExpiresAt: accessExpires,
+            RefreshExpiresAt: refreshExpires,
+            User: user.UserName,
+            UserId: user.Id,
+            UserBrnchId: user.UserBrnchId,
+            UserCounterId: user.UserCounterId);
     }
 }

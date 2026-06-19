@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using NexusProd.Api.Application.Abstractions;
 using NexusProd.Api.Application.Common;
+using NexusProd.Api.Domain.Entities;
 
 namespace NexusProd.Api.Application.UseCases.Auth;
 
@@ -53,17 +54,24 @@ public sealed class RefreshHandler : IHandler<RefreshCommand, RefreshResult>
         }
         if (userId is null) return Error.Unauthorized("Refresh token revoked or unknown");
 
-        // We could also look up the user to re-encode the claims, but
-        // for the POC the access token only needs userId. If the user
-        // was deleted, this still issues a token that will 404 on the
-        // next call — accept that for now.
+        // Look up the user so the rotated access token carries correct
+        // claims (UserName, def_branch, def_counter). Without this the
+        // access token would have placeholder zeros and downstream
+        // endpoints using those claims would misbehave.
+        User user;
         try
         {
-            _ = await _users.FindByUsernameAsync(string.Empty, cancellationToken); // placeholder no-op
+            var lookedUp = await _users.FindByIdAsync(userId.Value, cancellationToken);
+            if (lookedUp is null)
+            {
+                _logger.LogWarning("Refresh token references unknown userId {UserId}", userId.Value);
+                return Error.Unauthorized("User no longer exists");
+            }
+            user = lookedUp;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Refresh failed during placeholder user lookup for jti {Jti}", principal.Jti);
+            _logger.LogError(ex, "Refresh failed during user lookup for userId {UserId}", userId.Value);
             return Error.DatabaseError(ex.Message);
         }
 
@@ -78,7 +86,7 @@ public sealed class RefreshHandler : IHandler<RefreshCommand, RefreshResult>
             return Error.DatabaseError(ex.Message);
         }
 
-        var (newAccess, _, newAccessExp) = _jwt.IssueAccessToken(userId.Value, string.Empty, 0, 0); // placeholder no-op
+        var (newAccess, _, newAccessExp) = _jwt.IssueAccessToken(user.Id, user.UserName, user.UserBrnchId, user.UserCounterId);
         var (_, newRefreshJti, newRefreshExp) = _jwt.IssueRefreshToken(userId.Value);
         try
         {

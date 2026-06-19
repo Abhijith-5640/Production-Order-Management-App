@@ -18,6 +18,14 @@ public interface IUserRepository
     Task<User?> FindByUsernameAsync(string username, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the user with the matching <paramref name="userId"/>, or
+    /// <c>null</c> if no such user exists. Used by the refresh flow to
+    /// re-issue an access token whose claims (branch, counter, name)
+    /// match the current user record.
+    /// </summary>
+    Task<User?> FindByIdAsync(int userId, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Persists the bcrypt hash for the given user. Called by the login
     /// flow the first time a legacy plain-text user authenticates, so the
     /// transparent migration can finish without an out-of-band script.

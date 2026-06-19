@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Factory, Lock, User, ArrowRight, Settings2, Database } from 'lucide-react';
 import { toast } from 'react-toastify';
-import { api } from '../services/api';
+import { api, authStore } from '../services/api';
 import FullScreenLoader from '../components/FullScreenLoader';
 
 const Login = () => {
@@ -15,20 +15,24 @@ const Login = () => {
     useEffect(() => {
         // Debug helper: ensure a debug session always starts at a clean Login.
         if (import.meta.env.DEV) {
-            localStorage.removeItem('nexus_authenticated');
-            localStorage.removeItem('nexus_token');
-            localStorage.removeItem('nexus_token_expires');
-            localStorage.removeItem('nexus_user');
-            localStorage.removeItem('nexus_user_id');
-            localStorage.removeItem('nexus_user_brnch_id');
-            localStorage.removeItem('nexus_user_counter_id');
+            authStore.clearSession();
         }
         // Load config on mount
         const savedConfig = JSON.parse(localStorage.getItem('db_config') || '{}');
         if (Object.keys(savedConfig).length > 0) {
             setDbConfig({ ...dbConfig, ...savedConfig });
         }
-    }, []);
+
+        // Single point of response to the silent-refresh failure signal.
+        // Fired by services/api.js when the refresh cookie is gone or the
+        // server reports the access token was revoked.
+        const onSessionExpired = () => {
+            toast.info('Your session has expired. Please sign in again.');
+            navigate('/login', { replace: true });
+        };
+        window.addEventListener('nexus:session_expired', onSessionExpired);
+        return () => window.removeEventListener('nexus:session_expired', onSessionExpired);
+    }, [navigate]);
 
     const handleLogin = async (e) => {
         e.preventDefault();
@@ -45,9 +49,10 @@ const Login = () => {
             const result = await api.login(credentials.username, credentials.password);
 
             if (result && result.accessToken) {
-                localStorage.setItem('nexus_token', result.accessToken);
-                localStorage.setItem('nexus_token_expires', result.accessExpiresAt);
-                localStorage.setItem('nexus_authenticated', 'true');
+                authStore.setSession({
+                    accessToken: result.accessToken,
+                    accessExpiresAt: result.accessExpiresAt,
+                });
                 localStorage.setItem('nexus_user', result.user);
                 localStorage.setItem('nexus_user_id', String(result.userId));
                 localStorage.setItem('nexus_user_brnch_id', String(result.userBrnchId));
