@@ -72,6 +72,21 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             NameClaimType = System.Security.Claims.ClaimTypes.Name,
             RoleClaimType = System.Security.Claims.ClaimTypes.Role
         };
+
+        options.Events = new JwtBearerEvents
+        {
+            OnAuthenticationFailed = ctx =>
+            {
+                if (ctx.Exception is SecurityTokenExpiredException)
+                {
+                    ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    ctx.Response.ContentType = "application/json";
+                    return ctx.Response.WriteAsync(
+                        "{\"error\":\"token_expired\",\"message\":\"Access token expired. Please refresh.\"}");
+                }
+                return Task.CompletedTask;
+            }
+        };
     });
 
 builder.Services.AddAuthorization(opts =>

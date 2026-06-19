@@ -81,7 +81,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
             "SELECT getAdjustTime();",
             cancellationToken: cancellationToken));
         var CurncyDecml = await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            @"SELECT IFNULL(crncy_decml,3) AS CurncyDecml
+            @"SELECT IFNULL(curncy_decml,3) AS CurncyDecml
               FROM CTGE1165 
               WHERE brnch_id = @brnchId;",
             new { brnchId = brnchId },
@@ -102,10 +102,10 @@ public sealed class MySqlOrderRepository : IOrderRepository
             var groups = (await conn.QueryAsync<BillGroupRow>(new CommandDefinition(
                 @"SELECT DISTINCT brnch_id AS BrnchId, trip_no AS TripNo
                   FROM   INV21085
-                  WHERE  entry_type IN ('D','O')
+                  WHERE  stats IN ('D','O')
                     AND  IFNULL(is_billed,  0) = 0
                     AND  IFNULL(is_exclude, 0) = 0
-                    AND  CAST(dt AS DATE) = CASE entry_type
+                    AND  CAST(dt AS DATE) = CASE stats
                                               WHEN 'D' THEN CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
                                               ELSE CAST(NOW() AS DATE)
                                             END
@@ -124,12 +124,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                 #region ProductionTemplateFetch
                 var PrdtTemplts = await conn.QuerySingleOrDefaultAsync<TempltSetRow>(new CommandDefinition(
-                    @"SELECT  bt.prod_tmplt_id                       AS ProdTmpltId,
+                    @"SELECT  bt.prod_tmplt_id                           AS ProdTmpltId,
                                   bt.selling_brnch_id                    AS SellingBrnchId,
                                   bt.purchase_brnch_id                   AS PurchaseBrnchId,
                                   bt.selling_ledger_id                   AS SellingLedgerId,
                                   bt.purchase_ledger_id                  AS PurchaseLedgerId,
-                                  CAST(IFNULL(bt.is_transfer, 0) AS BIT) AS IsTransfer
+                                  IFNULL(bt.is_transfer, 0)              AS IsTransfer
                           FROM    INV21100 bt
                           WHERE   bt.selling_brnch_id = @sellingBrnchId 
                           AND bt.purchase_brnch_id = @brnchId
@@ -147,12 +147,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 #region BillConfigs
                 var BillNoConfigs = await conn.QuerySingleOrDefaultAsync<BillNoSettingsRow>(new CommandDefinition(
                     @"SELECT bill_no_prfx                                   BillNoPrfx,
-    							 auth_no AS                                     AuthNo,
-    							 delim                                          Delim,
-    							 ts.tariff_id                                   TariffId,
-    							 ts.pay_type_id                                 PayTypeId,
-    							 cs.counter_setings_id                          CounterSettingsId,
-                                  CAST(IFNULL(tf.is_exlusive_tax, 0) AS BIT)    Exclusive
+    							 auth_no AS                                 AuthNo,
+    							 delim                                      Delim,
+    							 ts.tariff_id                               TariffId,
+    							 ts.pay_type_id                             PayTypeId,
+    							 cs.counter_setings_id                      CounterSettingsId,
+                                 IFNULL(tf.is_exlusive_tax, 0)              Exclusive
     					FROM inv21075 ts
     					JOIN inv21033 cvs ON cvs.vou_typ_id = ts.vou_typ_id
     					JOIN inv21032 cs ON cs.cashier_usr_id = @userId
@@ -192,20 +192,21 @@ public sealed class MySqlOrderRepository : IOrderRepository
     				    						AND cvs.brnch_id = @sellingBrnchId)
     				    AND s.finyear_id = @finyear
     				    AND s.brnch_id = @sellingBrnchId
-    				    AND IFNULL(s.bill_prfx,'') = IFNULL(v_blprfx,'');",
+    				    AND IFNULL(s.bill_prfx,'') = IFNULL(@billPrfx,'');",
                     new
                     {
                         counterId = userCounterId,
                         sellingLedgerId = PrdtTemplts.SellingLedgerId,
                         sellingBrnchId = PrdtTemplts.SellingBrnchId,
-                        finyear = v_finyear
+                        finyear = v_finyear,
+                        billPrfx = BillNoConfigs.BillNoPrfx
                     },
                     transaction: tx, cancellationToken: cancellationToken));
                 }
                 else
                 {
                     bool IsContinuous = await conn.ExecuteScalarAsync<bool>(new CommandDefinition(
-                    @"SELECT CAST(IFNULL(i33.is_continuous, 0) AS BIT) AS IsContinuous
+                    @"SELECT IFNULL(i33.is_continuous, 0) AS IsContinuous
     		            FROM inv21033 i33
     		            JOIN inv21075 ts ON ts.vou_typ_id = i33.vou_typ_id 
     		            AND ts.brnch_id = i33.brnch_id
@@ -225,7 +226,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     if (IsContinuous)
                     {
                         BillNo = await conn.ExecuteScalarAsync<long>(new CommandDefinition(
-                        @"SELECT bill_no + 1 INTO v_billno
+                        @"SELECT bill_no + 1
     					    FROM inv31065 s
     					    WHERE s.vou_typ_id IN (
     					    			SELECT cvs.vou_typ_id
@@ -253,7 +254,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     else
                     {
                         BillNo = await conn.ExecuteScalarAsync<long>(new CommandDefinition(
-                        @"SELECT MAX(bill_no) + 1 into v_billno
+                        @"SELECT MAX(bill_no) + 1
     					    FROM inv31065 s
     					    WHERE s. vou_typ_id IN (SELECT cvs.vou_typ_id
     					    		FROM inv21075 ts
@@ -297,7 +298,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                         if (BillNo > 0)
                         {
-                            BillNo = await conn.ExecuteScalarAsync<long>(new CommandDefinition(
+                            var UpdateLastBill = await conn.ExecuteScalarAsync<long>(new CommandDefinition(
                             @"
                              
                              SET SQL_SAFE_UPDATES = 0;
@@ -362,7 +363,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                       JOIN   inv21050 s   ON s.itm_mast_id = i.itm_mast_id
                       JOIN   inv21001 t   ON t.tax_id      = i.tax_id
                       JOIN   inv21071 r   ON r.stock_mast_id = s.stock_mast_id
-                      JOIN   inv00000 u   ON u.unit_id     = r.unit_id
+                      JOIN   inv00000 u   ON u.unit_id     = i.unit_id
+                                          AND u.unit_id     = r.unit_id
                       JOIN   inv21070 tf  ON tf.tariff_id  = r.tariff_id
                       LEFT  JOIN inv21001 tc ON tc.tax_id    = i.cess_tax_id
                       WHERE  s.brnch_id  = @sellingBrnchId
@@ -375,8 +377,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                       AND  IFNULL(o.is_exclude, 0) = 0
                       AND  o.brnch_id  = @brnchId
                       AND  o.trip_no   = @tripNo
-                      AND  o.entry_type IN ('D','O')
-                      AND  CAST(o.dt AS DATE) = CASE o.entry_type
+                      AND  o.stats IN ('D','O')
+                      AND  CAST(o.dt AS DATE) = CASE o.stats
                                                   WHEN 'D' THEN CAST(DATE_ADD(@curentDate, INTERVAL -1 DAY) AS DATE)
                                                   ELSE CAST(@curentDate AS DATE)
                                                 END;",
@@ -471,117 +473,11 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     detailParams,
                     transaction: tx, cancellationToken: cancellationToken));
 
-                // (4f) totals — four round trips, mirroring the procedure.
-                decimal v_total;
-                if (v_taxKey == "GST")
-                {
-                    v_total = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
-                        $@"SELECT ROUND(COALESCE(SUM(
-                            (sales_qty*IFNULL(sales_rate, 0)*IFNULL(tax_per,0)/100)
-                          + (sales_qty*IFNULL(sales_rate, 0))), 0), {CurncyDecml})
-                          FROM   {detailTbl} d
-                          JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
-                          JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
-                          JOIN   inv21001 t ON t.tax_id       = i.tax_id
-                          WHERE  d.sales_mast_id = @sm;",
-                        new { sm = salesMastId },
-                        transaction: tx, cancellationToken: cancellationToken));
-                }
-                else
-                {
-                    v_total = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
-                        $@"SELECT ROUND(COALESCE(SUM(
-                            CASE WHEN @isExclusive = 1
-                                 THEN (sales_qty*IFNULL(sales_rate, 0)*IFNULL(tax_per,0)/100)
-                                    + (sales_qty*IFNULL(sales_rate, 0))
-                                 ELSE sales_qty*IFNULL(sales_rate, 0) END), 0), {CurncyDecml})
-                          FROM   {detailTbl} d
-                          JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
-                          JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
-                          JOIN   inv21001 t ON t.tax_id       = i.tax_id
-                          WHERE  d.sales_mast_id = @sm;",
-                        new { sm = salesMastId, isExclusive },
-                        transaction: tx, cancellationToken: cancellationToken));
-                }
-
-                decimal v_cgstTot = 0m, v_sgstTot = 0m, v_cessTot = 0m, v_grsTot = 0m;
-                if (v_taxKey == "GST")
-                {
-                    v_cgstTot = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
-                        $@"SELECT ROUND(COALESCE(SUM(
-                            sales_qty*IFNULL(sales_rate, 0)*(IFNULL(t.tax_per,0)/2)/100), 0), {CurncyDecml} )
-                          FROM   {detailTbl} d
-                          JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
-                          JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
-                          JOIN   inv21001 t ON t.tax_id       = i.tax_id
-                          WHERE  d.sales_mast_id = @sm;",
-                        new { sm = salesMastId },
-                        transaction: tx, cancellationToken: cancellationToken));
-                    v_sgstTot = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
-                        $@"SELECT ROUND(COALESCE(SUM(
-                            sales_qty*IFNULL(sales_rate, 0)*(IFNULL(t.tax_per,0)/2)/100), 0), {CurncyDecml} )
-                          FROM   {detailTbl} d
-                          JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
-                          JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
-                          JOIN   inv21001 t ON t.tax_id       = i.tax_id
-                          WHERE  d.sales_mast_id = @sm;",
-                        new { sm = salesMastId },
-                        transaction: tx, cancellationToken: cancellationToken));
-                    v_cessTot = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
-                        $@"SELECT ROUND(COALESCE(SUM(
-                            sales_qty*IFNULL(sales_rate, 0)*IFNULL(ct.tax_per,0)/100), 0), {CurncyDecml})
-                          FROM   {detailTbl} d
-                          JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
-                          JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
-                          JOIN   inv21001 ct ON ct.tax_id    = i.cess_tax_id
-                          WHERE  d.sales_mast_id = @sm;",
-                        new { sm = salesMastId },
-                        transaction: tx, cancellationToken: cancellationToken));
-                }
-
-                v_grsTot = await conn.ExecuteScalarAsync<decimal>(new CommandDefinition(
-                    $@"SELECT ROUND(COALESCE(SUM(
-                        CASE WHEN @isExclusive = 1
-                             THEN sales_qty*IFNULL(sales_rate, 0)
-                             ELSE (sales_qty*IFNULL(sales_rate, 0) * 100)
-                                / (100 + IFNULL(t.tax_per, 0) + IFNULL(ct.tax_per, 0)) END), 0), {CurncyDecml})
-                      FROM   {detailTbl} d
-                      JOIN   inv21050 s ON s.stock_mast_id = d.stock_mast_id
-                      JOIN   inv21010 i ON i.itm_mast_id  = s.itm_mast_id
-                      JOIN   inv21001 t ON t.tax_id       = i.tax_id
-                      LEFT  JOIN inv21001 ct ON ct.tax_id  = i.cess_tax_id
-                      WHERE  d.sales_mast_id = @sm;",
-                    new { sm = salesMastId, isExclusive },
-                    transaction: tx, cancellationToken: cancellationToken));
-
-                var v_totalTax = v_total - v_grsTot;
-
-                // (4g) master totals UPDATE.
-                await conn.ExecuteAsync(new CommandDefinition(
-                    $@"UPDATE {masterTbl}
-                        SET    grand_total  = @vTotal,
-                               tot_tax_amt  = @vTotalTax,
-                               cgst_tot     = @vCgstTot,
-                               sgst_tot     = @vSgstTot,
-                               cess_tot     = @vCessTot,
-                               tot_grs_amt  = @vGrsTot,
-                               tax_type_id  = @taxTypeId
-                        WHERE  sales_mast_id = @sm;",
-                    new
-                    {
-                        vTotal = v_total,
-                        vTotalTax = v_totalTax,
-                        vCgstTot = v_cgstTot,
-                        vSgstTot = v_sgstTot,
-                        vCessTot = v_cessTot,
-                        vGrsTot = v_grsTot,
-                        taxTypeId = (v_taxKey == "GST") ? 3 : 1,
-                        sm = salesMastId,
-                    },
-                    transaction: tx, cancellationToken: cancellationToken));
-
                 // (4h) detail CASE UPDATE — the big per-row recompute. Mirrors
-                // the procedure verbatim.
+                // the procedure verbatim. Runs first so the master totals can
+                // be derived by summing the now-populated detail columns below
+                // (replaces the four separate aggregation round trips the
+                // original port used).
                 await conn.ExecuteAsync(new CommandDefinition(
                     $@"UPDATE {detailTbl} d
                         JOIN   inv21050 s  ON s.stock_mast_id = d.stock_mast_id
@@ -635,6 +531,54 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     },
                     transaction: tx, cancellationToken: cancellationToken));
 
+                // (4f) totals — single round trip: sum the columns the detail
+                // UPDATE just populated. Replaces the four separate
+                // aggregations (v_total, v_cgstTot, v_sgstTot, v_cessTot,
+                // v_grsTot) the original port issued against the raw
+                // sales_qty/sales_rate/tax_per columns.
+                var totals = await conn.QuerySingleAsync<DetailTotalsRow>(new CommandDefinition(
+                    $@"SELECT COALESCE(SUM(grs_amt),  0) AS GrsTot,
+                              COALESCE(SUM(tax_amt),  0) AS TotTax,
+                              COALESCE(SUM(tot_amt),  0) AS GrandTotal,
+                              COALESCE(SUM(cgst_amt), 0) AS CgstTot,
+                              COALESCE(SUM(sgst_amt), 0) AS SgstTot,
+                              COALESCE(SUM(cess_amt), 0) AS CessTot
+                       FROM   {detailTbl}
+                       WHERE  sales_mast_id = @sm;",
+                    new { sm = salesMastId },
+                    transaction: tx, cancellationToken: cancellationToken));
+
+                var v_total = Math.Round(totals.GrandTotal, CurncyDecml);
+                var v_grsTot = Math.Round(totals.GrsTot, CurncyDecml);
+                var v_cgstTot = v_taxKey == "GST" ? Math.Round(totals.CgstTot, CurncyDecml) : 0m;
+                var v_sgstTot = v_taxKey == "GST" ? Math.Round(totals.SgstTot, CurncyDecml) : 0m;
+                var v_cessTot = v_taxKey == "GST" ? Math.Round(totals.CessTot, CurncyDecml) : 0m;
+                var v_totalTax = v_total - v_grsTot;
+
+                // (4g) master totals UPDATE.
+                await conn.ExecuteAsync(new CommandDefinition(
+                    $@"UPDATE {masterTbl}
+                        SET    grand_total  = @vTotal,
+                               tot_tax_amt  = @vTotalTax,
+                               cgst_tot     = @vCgstTot,
+                               sgst_tot     = @vSgstTot,
+                               cess_tot     = @vCessTot,
+                               tot_grs_amt  = @vGrsTot,
+                               tax_type_id  = @taxTypeId
+                        WHERE  sales_mast_id = @sm;",
+                    new
+                    {
+                        vTotal = v_total,
+                        vTotalTax = v_totalTax,
+                        vCgstTot = v_cgstTot,
+                        vSgstTot = v_sgstTot,
+                        vCessTot = v_cessTot,
+                        vGrsTot = v_grsTot,
+                        taxTypeId = (v_taxKey == "GST") ? 3 : 1,
+                        sm = salesMastId,
+                    },
+                    transaction: tx, cancellationToken: cancellationToken));
+
                 // (4i) BS row — the procedure's universal join row.
                 await conn.ExecuteAsync(new CommandDefinition(
                     @"INSERT INTO INV31065BS
@@ -660,17 +604,23 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                 // (4j) INV21085 flag — matches the source filter the precheck used.
                 await conn.ExecuteAsync(new CommandDefinition(
-                    @"UPDATE INV21085
+                    @"
+                    SET SQL_SAFE_UPDATES = 0;
+                    
+                    UPDATE INV21085
                         SET    is_billed = 1
                         WHERE  brnch_id  = @brnchId
                           AND  trip_no   = @tripNo
-                          AND  entry_type IN ('D','O')
+                          AND  stats IN ('D','O')
                           AND  IFNULL(is_billed,  0) = 0
                           AND  IFNULL(is_exclude, 0) = 0
-                          AND  CAST(dt AS DATE) = CASE entry_type
+                          AND  CAST(dt AS DATE) = CASE stats
                                                     WHEN 'D' THEN CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
                                                     ELSE CAST(NOW() AS DATE)
-                                                  END;",
+                                                  END;
+                    SET SQL_SAFE_UPDATES = 1;
+                    
+                    ",
                     new { brnchId = g.BrnchId, tripNo = g.TripNo },
                     transaction: tx, cancellationToken: cancellationToken));
 
@@ -1502,6 +1452,19 @@ public sealed class MySqlOrderRepository : IOrderRepository
         public decimal CgstPer { get; set; }
         public decimal SgstPer { get; set; }
         public decimal BaseRate { get; set; }
+    }
+
+    // (GenerateInvoicesAsync port) — single SUM() row from the detail table
+    // after the (4h) CASE UPDATE has populated tot_amt/tax_amt/grs_amt/
+    // cgst_amt/sgst_amt/cess_amt.
+    private sealed class DetailTotalsRow
+    {
+        public decimal GrsTot { get; set; }
+        public decimal TotTax { get; set; }
+        public decimal GrandTotal { get; set; }
+        public decimal CgstTot { get; set; }
+        public decimal SgstTot { get; set; }
+        public decimal CessTot { get; set; }
     }
     private sealed class VehicleDetailRow
     {

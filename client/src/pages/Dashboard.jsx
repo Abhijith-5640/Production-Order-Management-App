@@ -54,6 +54,10 @@ const Dashboard = () => {
             const UserBrnchId = parseInt(localStorage.getItem('nexus_user_brnch_id') ?? '0', 10) || 0;
             const { pendingExist } = await api.checkPendingOrders(UserBrnchId);
             setShowConfirm(pendingExist);
+            if(!pendingExist) 
+            {
+                fetchSections();
+            }
         } catch (error) {
             console.error('Failed to check pending orders:', error);
         }
