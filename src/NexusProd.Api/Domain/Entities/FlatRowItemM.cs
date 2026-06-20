@@ -12,5 +12,8 @@ internal sealed record FlatRowItemM(
     string Branch,
     int PurSaleId,
     int TripId,
-    int BrnchId
+    int BrnchId,
+    int PurTmpltId,
+    string TripName,
+    int TripSequence
 );

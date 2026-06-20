@@ -13,4 +13,5 @@ public sealed record OrderItem
     public string Unit { get; init; } = string.Empty;
     public bool IsCompleted { get; init; }
     public List<DistributionEntry> Distribution { get; init; } = new();
+
 }

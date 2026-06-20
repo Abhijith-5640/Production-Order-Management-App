@@ -7,6 +7,7 @@ import { api } from '../services/api';
 import FullScreenLoader from '../components/FullScreenLoader';
 import PickerModal from '../components/PickerModal';
 import DetailModal from '../components/DetailModal';
+import AdjustmentModal from '../components/AdjustmentModal';
 
 const Dashboard = () => {
     const navigate = useNavigate();
@@ -25,6 +26,7 @@ const Dashboard = () => {
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, type: 'section' }); // 'section' | 'trip'
     const [detailModal, setDetailModal] = useState({ isOpen: false, item: null });
     const [excludeConfirm, setExcludeConfirm] = useState({ isOpen: false, itemId: null, branch: null, brnchId: null, itemName: '', branchName: '', item: null });
+    const [adjustmentModal, setAdjustmentModal] = useState({ isOpen: false, item:null, currentTrip : null, trips = null,mode = null, purSaleEntryData = [] });
 
     // Add initial loading logic similar to confirming action in old code
     const [showConfirm, setShowConfirm] = useState(false);
@@ -261,16 +263,53 @@ const Dashboard = () => {
         }
     };
 
-    const confirmExclude = (item, branch = null, brnchId) => {
-        setExcludeConfirm({
-            isOpen: true,
-            itemId: item.id,
-            branch: branch,
-            itemName: item.name,
-            brnchId: brnchId,
-            branchName: branch || 'All Branches',
-            item: item,
-        });
+    // const confirmExclude = (item, branch = null, brnchId) => {
+    //     setExcludeConfirm({
+    //         isOpen: true,
+    //         itemId: item.id,
+    //         branch: branch,
+    //         itemName: item.name,
+    //         brnchId: brnchId,
+    //         branchName: branch || 'All Branches',
+    //         item: item,
+    //     });
+    // };
+
+    const handleExcludePop = (item, currentTrip, mode, purSaleId) =>{
+        
+        if(item === null || currentTrip === null || mode === null)
+            return;
+        
+        if(mode === "FE"){
+            
+            setAdjustmentModal({
+                isOpen:true,
+                item:item,
+                currentTrip:currentTrip,
+                trips:[],
+                mode:"full_exclude",
+                purSaleEntryData : item.distributions
+            })
+
+        }
+        else if(mode === "SE"){
+
+            const activeBillEntry = item.distributions.find(be=> be.purSaleId == purSaleId);
+            if(activeBillEntry === null)
+                return;
+
+            setAdjustmentModal({
+                isOpen:true,
+                item:item,
+                currentTrip:currentTrip,
+                trips:[],
+                mode:"full_exclude",
+                purSaleEntryData : activeBillEntry
+            })
+        }
+        else{
+            
+        }
     };
 
     return (
@@ -303,7 +342,7 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Exclude Confirm Modal */}
+            {/* Exclude Confirm Modal
             {excludeConfirm.isOpen && (
                 <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"></div>
@@ -329,7 +368,7 @@ const Dashboard = () => {
                         </div>
                     </div>
                 </div>
-            )}
+            )} */}
 
             {/* Navbar */}
             <nav className="glass-header sticky top-0 z-40 px-6 py-3 flex justify-between items-center bg-white/80 backdrop-blur-xl border-b border-slate-200">
@@ -473,6 +512,11 @@ const Dashboard = () => {
                 onSave={handleSaveInvoice}
                 onExcludeItem={(itemId, branch,brnchId) => confirmExclude(detailModal.item, branch, brnchId)}
             />
+
+            <AdjustmentModal
+                                                
+                                            />
+            
         </>
     );
 };

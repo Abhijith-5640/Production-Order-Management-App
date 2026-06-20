@@ -680,9 +680,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
             var TripsList = new List<TripsM>();
             await using var conn = await _factory.OpenAsync(cancellationToken);
             var rows = await conn.QueryAsync<TripsM>(new CommandDefinition(
-                @"SELECT  id AS Id,
-			              trip AS Trip
-                  FROM Trip
+                @"SELECT DISTINCT t.id AS Id,
+                  				t.trip AS Trip
+                  FROM Trip t
+                  JOIN INV31065BS bsm ON bsm.trip_no = t.id
+                  WHERE bsm.createdDt >= CURDATE()
+                  AND bsm.createdDt < CURDATE() + INTERVAL 1 DAY
                   ORDER BY trip_seq ASC",
                 new { SecId }, cancellationToken: cancellationToken));
             TripsList = rows.ToList();
@@ -709,7 +712,10 @@ public sealed class MySqlOrderRepository : IOrderRepository
             u.Branch,
             u.BillId AS PurSaleId,
             u.Trip  AS TripId,
-            u.BrnchId
+            u.BrnchId,
+            u.PurTmpltId,
+            t.trip AS TripName,
+            t.trip_sequence AS TripSequence
         FROM (
             SELECT 
                 i.itm_mast_id    AS ItemId,
@@ -719,7 +725,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 b.brnch_nam      AS Branch,
                 bs.pur_sale_id   AS BillId,
                 bs.trip_no       AS Trip,
-                bs.pur_brnch_id AS BrnchId
+                bs.pur_brnch_id AS BrnchId,
+                bs.pur_templt_id AS PurTmpltId
             FROM INV31065BS bs
             JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
             JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
@@ -748,7 +755,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 b.brnch_nam      AS Branch,
                 bs.pur_sale_id   AS BillId,
                 bs.trip_no       AS Trip,
-                bs.pur_brnch_id AS BrnchId
+                bs.pur_brnch_id AS BrnchId,
+                bs.pur_templt_id AS PurTmpltId
             FROM INV31065BS bs
             JOIN INV31065 sm     ON bs.sales_mast_id = sm.sales_mast_id
             JOIN INV31066 sd     ON sd.sales_mast_id = sm.sales_mast_id
@@ -767,6 +775,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
               AND bs.trip_no         = @tripId
               AND pc.prdt_cat_val_id = @sectionId
         ) u
+        JOIN Trip t ON t.id = u.Trip
         ORDER BY u.`Name`, u.Branch, u.BillId";
 
 
@@ -774,6 +783,16 @@ public sealed class MySqlOrderRepository : IOrderRepository
             var rows = (await conn.QueryAsync<FlatRowItemM>(new CommandDefinition(
                 sql,
                 new { sectionId, tripId }, cancellationToken: cancellationToken))).ToList();
+
+            var tripsByTemplate = rows.Where(x => x.TripId != 0) // adjust/remove guard depending on whether TripId can be null/0 legitimately
+                                        .GroupBy(x => x.PurTmpltId)
+                                        .ToDictionary(
+                                            g => g.Key,
+                                            g => g.Select(x => new Trip { Id = x.TripId, Name = x.TripName, TripSeq = x.TripSequence })
+                                                  .DistinctBy(t => t.Id)
+                                                  .OrderBy(o => o.TripSeq)
+                                                  .ToList()
+                                        );
 
             var byItem = new Dictionary<int, OrderItem>();
             foreach (var row in rows)
@@ -789,9 +808,14 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         // Unit = row.Unit,
                         IsCompleted = false,
                         Distribution = new List<DistributionEntry>()
+
                     };
                     byItem[row.StockMastId] = item;
                 }
+
+                tripsByTemplate.TryGetValue(row.PurTmpltId, out var availableTrips);
+
+
                 item.Distribution.Add(new DistributionEntry
                 {
                     Branch = row.Branch,
@@ -799,6 +823,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     Trip = row.TripId,
                     Qty = Convert.ToDecimal(row.Qty),
                     BrnchId = row.BrnchId,
+                    AvailableTrips = availableTrips ?? new List<Trip>()
                 });
                 // if (!ToBool(item.IsCompleted)) item = item with { IsCompleted = false };
                 byItem[row.StockMastId] = item;
@@ -1468,8 +1493,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
     }
     private sealed class VehicleDetailRow
     {
-        public string VehicleNo { get; set; }
-        public string DriverName { get; set; }
+        public string VehicleNo { get; set; } = string.Empty;
+        public string DriverName { get; set; } = string.Empty;
 
     }
 }
