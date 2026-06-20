@@ -27,6 +27,25 @@ const USER_INFO_KEYS = [
     'nexus_user', 'nexus_user_id', 'nexus_user_brnch_id', 'nexus_user_counter_id',
 ];
 
+// Single source of truth for the session-expired event name. Imported by
+// App.jsx (top-level listener) and Login.jsx (toast).
+export const SESSION_EXPIRED_EVENT = 'nexus:session_expired';
+
+// Dispatch the session-expired event with a small re-entrancy guard.
+// Multiple in-flight requests can all reject with SESSION_EXPIRED in the
+// same tick (e.g. one from PrivateRoute's cold-start refresh, one from the
+// Dashboard's first fetch). We dedupe dispatches within a short window so
+// the listener — which triggers a router navigation — only runs once.
+//
+// Exported so PrivateRoute's cold-start refresh can route through the same
+// guard instead of bypassing it with a raw dispatchEvent.
+export function dispatchSessionExpired() {
+    const last = window.__nexusLastSessionExpired || 0;
+    if (Date.now() - last < 1000) return;
+    window.__nexusLastSessionExpired = Date.now();
+    window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+}
+
 // ---------------------------------------------------------------------------
 // Auth store — single source of truth for the localStorage session keys.
 // ---------------------------------------------------------------------------
@@ -126,7 +145,7 @@ async function request(path, init = {}, _isRetry = false) {
             return await request(path, init, true);
         } catch {
             authStore.clearSession();
-            window.dispatchEvent(new CustomEvent('nexus:session_expired'));
+            dispatchSessionExpired();
             const err = new Error('Session expired. Please log in again.');
             err.code = 'SESSION_EXPIRED';
             throw err;
@@ -138,7 +157,7 @@ async function request(path, init = {}, _isRetry = false) {
     // recover by refreshing, so route them back to /login.
     if (response.status === 401 && body?.message === 'Token revoked') {
         authStore.clearSession();
-        window.dispatchEvent(new CustomEvent('nexus:session_expired'));
+        dispatchSessionExpired();
     }
 
     // Everything else (real auth failure, server error, etc.) surfaces as before.

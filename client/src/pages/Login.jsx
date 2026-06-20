@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Factory, Lock, User, ArrowRight, Settings2, Database } from 'lucide-react';
 import { toast } from 'react-toastify';
-import { api, authStore } from '../services/api';
+import { api, authStore, SESSION_EXPIRED_EVENT } from '../services/api';
 import FullScreenLoader from '../components/FullScreenLoader';
 
 const Login = () => {
@@ -23,15 +23,16 @@ const Login = () => {
             setDbConfig({ ...dbConfig, ...savedConfig });
         }
 
-        // Single point of response to the silent-refresh failure signal.
-        // Fired by services/api.js when the refresh cookie is gone or the
-        // server reports the access token was revoked.
+        // Inform the user when their session expired. Navigation is owned
+        // by the SessionExpiredBridge in App.jsx — this listener only
+        // surfaces the toast so the user knows why they were bounced.
+        // The toast only fires once because dispatchSessionExpired()
+        // debounces duplicate events within a 1s window.
         const onSessionExpired = () => {
             toast.info('Your session has expired. Please sign in again.');
-            navigate('/login', { replace: true });
         };
-        window.addEventListener('nexus:session_expired', onSessionExpired);
-        return () => window.removeEventListener('nexus:session_expired', onSessionExpired);
+        window.addEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
+        return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onSessionExpired);
     }, [navigate]);
 
     const handleLogin = async (e) => {
