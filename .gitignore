@@ -1,4 +1,163 @@
-server/node_modules
-client/node_modules
-node_modules
-dist
+# ---------------------------------------------------------------------------
+# NexusProd — Production Order Management App
+#
+# This project is a polyglot repo:
+#   * .NET 8 API            (src/NexusProd.Api)        -> bin/, obj/, wwwroot/
+#   * React + Vite client   (client/)                  -> client/dist/
+#   * Node legacy bridge    (server/, scripts/)        -> node_modules/
+#   * Vite build artifact   (client/dist -> wwwroot)   -> src/NexusProd.Api/wwwroot/
+#
+# Keep this file the single source of truth for "do not commit" patterns.
+# Sections below are grouped by ecosystem. Order: most-specific → most-general.
+# ---------------------------------------------------------------------------
+
+# ============================================================
+# Secrets — NEVER commit
+# ============================================================
+# db_config.json holds plaintext MySQL credentials. Tracked historically
+# with default credentials; if you must re-include it, rotate the password
+# first and document the rotation in DEPLOYMENT_GUIDE.md.
+server/db_config.json
+
+# Generic .env files
+.env
+.env.*
+!.env.example
+
+# Local-only overrides for tooling (eslint, prettier, vite, etc.)
+*.local
+**/*.local
+
+# ============================================================
+# .NET / Visual Studio — build artifacts
+# ============================================================
+# Standard MSBuild outputs
+bin/
+obj/
+out/
+
+# Compiled binaries and symbols
+*.dll
+*.exe
+*.pdb
+*.cache
+*.cache.json
+*.sourcelink.json
+*.AssemblyInfo.cs
+*AssemblyInfoInputs.cache
+apphost.exe
+rjsmcshtml.dswa.cache.json
+rjsmrazor.dswa.cache.json
+*.deps.json
+*.runtimeconfig.json
+*.runtimeconfig.dev.json
+*.json.local
+*.user
+*.suo
+
+# VS workspace + Rider / VS Code (project-wide)
+.vs/
+.idea/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Rider
+*.sln.docstates
+*.swp
+
+# Resharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+
+# ============================================================
+# Node / npm / pkg — dependency trees and packager output
+# ============================================================
+node_modules/
+**/node_modules/
+
+# pkg (the packager that turns the server into nexus-prod.exe) drops its
+# single-file output at the repo root
+dist/
+*.exe.local
+
+# ============================================================
+# Vite / React client — build output
+# ============================================================
+# The client build outputs to client/dist by default, AND vite.config.js
+# is configured to also write into src/NexusProd.Api/wwwroot so the
+# .NET server can serve the SPA from a single executable. Both must
+# stay ignored — they're regenerated on every `npm run build`.
+client/dist/
+**/dist/
+
+# Vite/React build sidecar files
+*.tsbuildinfo
+*.local
+.vite/
+
+# ============================================================
+# Vite output that gets copied into the .NET wwwroot
+# ============================================================
+# vite.config.js: `build.outDir = '../src/NexusProd.Api/wwwroot'`
+# These are generated; ignore the whole folder. If you ever need to
+# ship a static asset from the API project, add it under src/NexusProd.
+# Api/Resources/ instead.
+src/NexusProd.Api/wwwroot/
+!**/wwwroot/.gitkeep
+
+# ============================================================
+# Logs
+# ============================================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+dotnet-build.log
+build.log
+
+# ============================================================
+# Test / coverage output
+# ============================================================
+coverage/
+*.lcov
+.nyc_output/
+
+# ============================================================
+# OS / editor scratch
+# ============================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# Vim / Emacs
+*.swp
+*.swo
+*~
+*.un~
+\#*\#
+.\#*
+
+# ============================================================
+# Misc / scratch
+# ============================================================
+*.pid
+*.pid.lock
+*.seed
+*.tgz
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+
+# Backup files
+*.bak
+*.orig
+*.rej
