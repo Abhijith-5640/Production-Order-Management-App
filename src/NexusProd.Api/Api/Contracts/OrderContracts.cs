@@ -26,14 +26,15 @@ public sealed record GenerateInvoicesResponse(bool Success, string Message, int 
 public sealed record UpdateOrderRequest(
     int ItemId,
     int Trip,
-    IReadOnlyList<UpdateOrderDistributionDto> NewDistribution);
+    IReadOnlyList<UpdateOrderDistributionDto> Distribution);
 
 public sealed record UpdateOrderDistributionDto(
     int PurSaleId,
     int StockMastId,
     decimal OriginalQty,
     string Branch,
-    decimal? Qty);
+    decimal? Qty,
+    int? TargetTrip = null);
 
 public sealed record UpdateOrderResponse(bool Success, string Message);
 

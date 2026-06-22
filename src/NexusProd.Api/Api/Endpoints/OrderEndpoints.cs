@@ -31,7 +31,7 @@ public static class OrderEndpoints
 
         group.MapPost("/update", async (UpdateOrderRequest req, IHandler<UpdateInvoiceCommand, string> h, CancellationToken ct) =>
         {
-            var dist = req.NewDistribution
+            var dist = req.Distribution
                 .Select(d => new Domain.Entities.DistributionEntry
                 {
                     PurSaleId = d.PurSaleId,
@@ -40,6 +40,7 @@ public static class OrderEndpoints
                     Branch = d.Branch,
                     Trip = req.Trip,
                     Qty = d.Qty,
+                    TargetTrip = d.TargetTrip,
                 })
                 .ToList();
             var r = await h.HandleAsync(new UpdateInvoiceCommand(req.ItemId, req.Trip, dist), ct);

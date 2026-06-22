@@ -51,7 +51,7 @@ const DetailModal = ({ isOpen, activeItem, currentTrip, onClose, onUpdateQty, on
                                 </button>
                             </div>
                             <button
-                                onClick={() => onExcludeItem(activeItem.StockMastId, dist.branch, dist.brnchId)}
+                                onClick={() => onExcludeItem(activeItem, currentTrip, "SE", dist)}
                                 className="w-10 h-10 rounded-xl bg-red-50 text-red-500 hover:bg-red-500 hover:text-white flex items-center justify-center shadow-sm active:scale-95 transition-all border-none"
                                 title="Exclude this branch from the trip"
                             >

@@ -1,60 +1,60 @@
 import React, { useState, useEffect } from 'react';
-import { X, AlertCircle, Ban, ArrowRight } from 'lucide-react';
+import { X, Ban } from 'lucide-react';
 
 const AdjustmentModal = ({
     isOpen,
     item,
     currentTrip,
-    trips = [],
+    mode, // 'full_exclude' | 'single_exclude' | 'quantity_reduction'
+    filterPurSaleId = null, // for single_exclude — restrict to one row
     onClose,
     onConfirm,
-    mode, // 'full_exclude' | 'single_exclude' | 'quantity_reduction'
-    purSaleEntryData = []
 }) => {
-    const [targetTrips, setTargetTrips] = useState([]);
     const [purSaleEntries, setPurSaleEntries] = useState([]);
     const [localAdjustments, setLocalAdjustments] = useState({});
 
     useEffect(() => {
-        if(isOpen && item !== null && item.distributions !== null && item.distributions.length > 0) 
-        {
-            const initial = {};
-            if(purSaleEntries.length > 0) 
-            {
-                purSaleEntries.forEach(d => {
-                    initial[d.purSaleId] = {
-                        exclude: mode === 'full_exclude' || targetTrips.length === 0,
-                        targetTripId: targetTrips.length > 0 ? targetTrips[0] : ''
-                    };
-                }); 
-            }
-            setLocalAdjustments(initial);
-            setTargetTrips();
+        if (!isOpen || !item || !Array.isArray(item.distribution) || item.distribution.length === 0) {
+            setPurSaleEntries([]);
+            setLocalAdjustments({});
+            return;
         }
-    },[item, currentTrip, trips, mode]);
 
-    setPurSaleEntries(
-        item != null && item.distributions != null && item.distributions.length > 0
-            ? (mode == 'full_exclude'
-                 ? item.distributions 
-                 : item.distributions.filter(d => d.purSaleId === purSaleId)) 
-            : []
-    );
+        // Determine which entries to show based on mode
+        let entries = item.distribution;
+        if (mode === 'single_exclude' && filterPurSaleId != null) {
+            entries = item.distribution.filter(d => d.purSaleId === filterPurSaleId);
+        } else if (mode === 'quantity_reduction') {
+            entries = item.distribution.filter(d => Number(d.qty) < Number(d.originalQty ?? d.qty));
+        }
+        setPurSaleEntries(entries);
 
-    setTargetTrips(
-        isOpen && trips !== null && trips.length > 0
-            ? trips.filter(trip => {
-                const tripIndex = trips.findIndex(t => (typeof t === 'object' ? t.id : t.id) === currentTrip.id);
-                const currentIndex = trips.findIndex(t => (typeof t === 'object' ? t.id : t.id) === trip.id);
-                return currentIndex > tripIndex; // Only include trips after the current trip
-            })
-            : []
-    );
+        // Seed localAdjustments. Each row's target-trip dropdown is sourced
+        // from its own entry.availableTrips (server-curated per PurTmpltId),
+        // excluding the row's own trip. The "no candidates" guard that gated
+        // the exclude checkbox is now evaluated per-row inside the render
+        // (see `candidates` below) instead of via shared state.
+        const initial = {};
+        entries.forEach(d => {
+            const candidates = (d.availableTrips ?? []).filter(t => t.id !== d.trip);
+            initial[d.purSaleId] = {
+                // For FE / SE: default to fully excluded
+                // For QR: default to "move diff to next available trip" if one exists,
+                //         else ignore (exclude = true means ignore the diff)
+                exclude: mode === 'full_exclude' || mode === 'single_exclude' || candidates.length === 0,
+                targetTrip: candidates.length > 0 ? candidates[0].id : ''
+            };
+        });
+        setLocalAdjustments(initial);
+    }, [isOpen, item, currentTrip, mode, filterPurSaleId]);
 
     if (!isOpen || !item) return null;
 
     const handleToggleExclude = (purSaleId) => {
-        if (targetTrips.length === 0) return; // Must remain excluded if no other trips
+        // Look up the row's own availableTrips to decide if toggling is allowed.
+        const row = purSaleEntries.find(p => p.purSaleId === purSaleId);
+        const candidates = (row?.availableTrips ?? []).filter(t => t.id !== row?.trip);
+        if (candidates.length === 0) return; // Must remain excluded if no other trips
         setLocalAdjustments(prev => ({
             ...prev,
             [purSaleId]: {
@@ -64,25 +64,34 @@ const AdjustmentModal = ({
         }));
     };
 
-    const handleChangeTargetTrip = (purSaleId, tripId) => {
+    const handleChangeTargetTrip = (purSaleId, tripName) => {
         setLocalAdjustments(prev => ({
             ...prev,
             [purSaleId]: {
                 ...prev[purSaleId],
-                targetTrip: tripId
+                targetTrip: tripName
             }
         }));
     };
 
     const handleSave = () => {
-        const updates = branchesToAdjust.map(b => {
-            const config = localAdjustments[b.branch] || {};
+        const updates = purSaleEntries.map(entry => {
+            const config = localAdjustments[entry.purSaleId] || {};
+            const isQtyReduction = mode === 'quantity_reduction';
+            const reducedQty = isQtyReduction
+                ? Number(entry.originalQty ?? entry.qty) - Number(entry.qty)
+                : Number(entry.qty);
             return {
-                branch: b.branch,
-                currentQty: b.currentQty,
-                balanceQty: b.qty,
-                balanceAction: config.exclude ? 'discard' : 'move',
-                targetTrip: config.exclude ? null : config.targetTrip
+                purSaleId: entry.purSaleId,
+                branch: entry.branch,
+                qty: entry.qty,
+                reducedQty: isQtyReduction ? reducedQty : null,
+                // For QR: "exclude" on the diff means ignore the diff (no move, no discard)
+                // For FE/SE: "exclude" means fully exclude this row
+                balanceAction: isQtyReduction
+                    ? (config.exclude ? 'ignore' : 'move')
+                    : (config.exclude ? 'discard' : 'move'),
+                targetTrip: config.targetTrip || null
             };
         });
         onConfirm(updates);
@@ -94,20 +103,12 @@ const AdjustmentModal = ({
     if (mode === 'quantity_reduction') {
         title = "Balance Quantity Rollover";
         subtitle = "Choose where to route the remaining balance quantities";
+    } else if (mode === 'single_exclude') {
+        title = "Exclude Branch";
+        subtitle = "Choose whether to discard this branch or move it to a later trip";
     }
 
-    const normalizedOptions = targetTrips.map((opt, index) => {
-        if (typeof opt === 'object' && opt !== null) {
-            return {
-                id: opt.id !== undefined ? opt.id : index,
-                name: opt.name || ''
-            };
-        }
-        return {
-            id: index,
-            name: String(opt)
-        };
-    });
+    const tripLabel = currentTrip ? (currentTrip.trip || currentTrip.name || '') : '';
 
     return (
         <div className="fixed inset-0 z-[150] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
@@ -130,7 +131,7 @@ const AdjustmentModal = ({
                                 {item.name}
                             </span>
                             <span className="text-[10px] font-black bg-slate-100 text-slate-500 px-2 py-0.5 rounded uppercase tracking-wider">
-                                Current: {currentTrip}
+                                Current: {tripLabel}
                             </span>
                         </div>
                     </div>
@@ -146,16 +147,23 @@ const AdjustmentModal = ({
                 <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-slate-50/50">
                     {purSaleEntries.map((p) => {
                         const config = localAdjustments[p.purSaleId] || { exclude: false, targetTrip: '' };
+                        // Per-row candidate trips: server-curated availableTrips, minus the row's own trip.
+                        const candidates = (p.availableTrips ?? []).filter(t => t.id !== p.trip);
+
+                        // For QR mode, show the diff (originalQty - qty) in the qty badge
+                        const displayQty = mode === 'quantity_reduction'
+                            ? Math.max(0, Number(p.originalQty ?? p.qty) - Number(p.qty))
+                            : p.qty;
                         return (
                             <div
-                                key={b.branch}
+                                key={p.purSaleId}
                                 className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-4"
                             >
                                 {/* Outlet info and Qty */}
                                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                                     <div>
                                         <h4 className="font-bold text-slate-700 text-sm uppercase tracking-wide">
-                                            {b.branch}
+                                            {p.branch}
                                         </h4>
                                         <p className="text-xs text-slate-400 font-semibold mt-0.5">
                                             {mode === 'quantity_reduction' ? 'Remaining Balance' : 'Current Quantity'}
@@ -163,7 +171,7 @@ const AdjustmentModal = ({
                                     </div>
                                     <div className="text-right">
                                         <span className="text-2xl font-black text-indigo-600">
-                                            {b.qty}
+                                            {displayQty}
                                         </span>
                                         <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">
                                             {item.unit}
@@ -183,38 +191,36 @@ const AdjustmentModal = ({
                                         <input
                                             type="checkbox"
                                             checked={config.exclude}
-                                            onChange={() => handleToggleExclude(b.purSaleId)}
+                                            onChange={() => handleToggleExclude(p.purSaleId)}
                                             className="w-4 h-4 rounded border-slate-300 text-red-600 focus:ring-red-500"
-                                            disabled={targetTrips.length === 0}
+                                            disabled={candidates.length === 0}
                                         />
                                         <div className="flex items-center gap-1.5 font-bold text-xs uppercase tracking-wider">
                                             <Ban className="w-3.5 h-3.5" />
-                                            Fully Exclude
+                                            {mode === 'quantity_reduction' ? 'Ignore Diff' : 'Fully Exclude'}
                                         </div>
                                     </label>
 
-                                    {/* Target Trip Dropdown */}
+                                    {/* Target Trip Dropdown — per-row candidates, excluding row's own trip */}
                                     <div className="flex flex-col">
                                         <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 ml-1">
                                             Route to Target Trip
                                         </label>
                                         <select
-                                            disabled={config.exclude || targetTrips.length === 0}
+                                            disabled={config.exclude || candidates.length === 0}
                                             value={config.targetTrip}
-                                            onChange={(e) => handleChangeTargetTrip(b.branch, e.target.value)}
+                                            onChange={(e) => handleChangeTargetTrip(p.purSaleId, e.target.value)}
                                             className={`w-full p-3 bg-slate-50 border-2 border-transparent rounded-xl outline-none font-semibold text-xs transition-all ${config.exclude
                                                     ? 'opacity-40 cursor-not-allowed text-slate-400'
                                                     : 'focus:border-indigo-500 text-slate-700'
                                                 }`}
                                         >
-                                            {normalizedOptions
-                                            .sort((a, b) => a.id - b.id)
-                                            .map((opt, index) => (
-                                                <option key={opt.id ?? `${opt.name}-${index}`} value={opt.name}>
+                                            {candidates.map((opt, index) => (
+                                                <option key={opt.id ?? `${opt.name}-${index}`} value={opt.id}>
                                                     {opt.name}
                                                 </option>
                                             ))}
-                                            {targetTrips.length === 0 && (
+                                            {candidates.length === 0 && (
                                                 <option value="">No subsequent trips generated</option>
                                             )}
                                         </select>
@@ -224,7 +230,7 @@ const AdjustmentModal = ({
                         );
                     })}
 
-                    {branchesToAdjust.length === 0 && (
+                    {purSaleEntries.length === 0 && (
                         <p className="text-center text-slate-400 py-6">No distributions loaded for adjustment.</p>
                     )}
                 </div>

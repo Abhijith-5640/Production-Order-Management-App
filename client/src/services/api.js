@@ -186,9 +186,9 @@ export const api = {
     getOrders: (sectionId, trip) =>
         request(`/orders?section=${encodeURIComponent(sectionId)}&trip=${encodeURIComponent(trip)}`),
 
-    updateInvoice: (itemId, trip, newDistribution) => request('/orders/update', {
+    updateInvoice: (itemId, trip, distribution) => request('/orders/update', {
         method: 'POST',
-        body: JSON.stringify({ itemId, trip, newDistribution }),
+        body: JSON.stringify({ itemId, trip, distribution }),
     }),
 
     saveConfig: (configData) => request('/config/save', {

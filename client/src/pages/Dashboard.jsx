@@ -25,8 +25,8 @@ const Dashboard = () => {
     // Modals
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, type: 'section' }); // 'section' | 'trip'
     const [detailModal, setDetailModal] = useState({ isOpen: false, item: null });
-    const [excludeConfirm, setExcludeConfirm] = useState({ isOpen: false, itemId: null, branch: null, brnchId: null, itemName: '', branchName: '', item: null });
-    const [adjustmentModal, setAdjustmentModal] = useState({ isOpen: false, item:null, currentTrip : null, trips = null,mode = null, purSaleEntryData = [] });
+    // const [excludeConfirm, setExcludeConfirm] = useState({ isOpen: false, itemId: null, branch: null, brnchId: null, itemName: '', branchName: '', item: null });
+    const [adjustmentModal, setAdjustmentModal] = useState({ isOpen: false, item: null, currentTrip: null, trips: null, mode: null, filterPurSaleId: null });
 
     // Add initial loading logic similar to confirming action in old code
     const [showConfirm, setShowConfirm] = useState(false);
@@ -150,7 +150,18 @@ const Dashboard = () => {
         try {
             const { orders } = await api.getOrders(section.id, trip.id);
             console.log(orders);
-            setOrderData(orders || []);
+            // Normalize every distribution once at load time so FE/SE/QR all
+            // see the same shape (distribution singular, originalQty snapshot,
+            // per-row stockMastId promoted from the parent item).
+            const normalized = (orders || []).map(o => ({
+                ...o,
+                distribution: (o.distribution || []).map(d => ({
+                    ...d,
+                    originalQty: d.originalQty ?? d.qty,
+                    stockMastId: d.stockMastId ?? o.stockMastId,
+                })),
+            }));
+            setOrderData(normalized);
         } catch (error) {
             toast.error('Failed to load orders');
         } finally {
@@ -159,15 +170,9 @@ const Dashboard = () => {
     };
 
     const handleOpenDetail = (item) => {
-        // Deep clone the object so adjustments are isolated until save
+        // Deep clone the object so adjustments are isolated until save.
+        // Distribution is already normalized in loadOrders; no rename needed.
         const cloned = JSON.parse(JSON.stringify(item));
-        // Snapshot originalQty + stockMastId at modal-open so the server-side
-        // diff filter (Qty == OriginalQty) can skip unchanged rows.
-        cloned.distribution = cloned.distribution.map(d => ({   
-            ...d,
-            originalQty: d.qty,
-            stockMastId: cloned.stockMastId,
-        }));
         setDetailModal({ isOpen: true, item: cloned });
     };
 
@@ -177,25 +182,48 @@ const Dashboard = () => {
         setDetailModal({ ...detailModal, item: updatedItem });
     };
 
-    const handleSaveInvoice = async () => {
+    // After +/- edits, if any row has qty < originalQty we must route the
+    // diff via AdjustmentModal before saving. The actual save is performed
+    // in `commitSaveInvoice` once the user confirms (or skips) the modal.
+    const handleSaveInvoice = () => {
+        const { item } = detailModal;
+        if (!item) return;
+        const reduced = (item.distribution || []).filter(
+            d => Number(d.qty) < Number(d.originalQty ?? d.qty)
+        );
+        if (reduced.length > 0) {
+            // Open the modal in qty_reduction mode. Don't close DetailModal —
+            // if user cancels, they keep their edits and can re-click Save.
+            setAdjustmentModal({
+                isOpen: true,
+                item,
+                currentTrip,
+                trips: trips || [],
+                mode: 'quantity_reduction',
+                filterPurSaleId: null,
+            });
+            return;
+        }
+        // No reductions — go straight to save.
+        commitSaveInvoice();
+    };
+
+    const commitSaveInvoice = async () => {
         setLoading({ state: true, text: 'Updating Trip Invoice...' });
         try {
             const { item } = detailModal;
             const tripId = currentTrip.id;
-            // Project DistributionDto ({ branch, trip, qty, purSaleId, stockMastId, originalQty })
-            // -> UpdateOrderDistributionDto ({ purSaleId, stockMastId, originalQty, branch, qty })
-            const newDistribution = item.distribution.map(d => ({
+            const distribution = item.distribution.map(d => ({
                 purSaleId: d.purSaleId,
                 stockMastId: d.stockMastId,
                 originalQty: d.originalQty,
                 branch: d.branch,
                 qty: d.qty,
             }));
-            const result = await api.updateInvoice(item.id, tripId, newDistribution);
+            const result = await api.updateInvoice(item.id, tripId, distribution);
             if (result.success) {
-                toast.success(`Invoices updated for ${currentTrip.Trip}`);
+                toast.success(`Invoices updated for ${currentTrip.trip || currentTrip.name || ''}`);
                 setDetailModal({ isOpen: false, item: null });
-                // Reload order list to get refreshed completed states
                 await loadOrders(currentSection, currentTrip);
             } else {
                 toast.error(result.message);
@@ -207,20 +235,96 @@ const Dashboard = () => {
         }
     };
 
-    const handleExcludeItem = async (itemId, branch = null, brnchId) => {
-        setExcludeConfirm({ isOpen: false, itemId: null, branch: null, brnchId: null, itemName: '', branchName: '', item: null });
+    // Called by AdjustmentModal onConfirm in qty_reduction mode. The modal
+    // already filtered the entries; we merge the route/diff decisions back
+    // into the full distribution array and call updateInvoice.
+    const handleAdjustmentConfirm = async (updates) => {
+        // Close the AdjustmentModal immediately; show the loader during the save.
+        setAdjustmentModal(prev => ({ ...prev, isOpen: false }));
+        const mode = adjustmentModal.mode;
+
+        if (mode === 'full_exclude' || mode === 'single_exclude') {
+            // Collect purSaleIds of rows the user chose to exclude
+            const purSaleIds = updates
+                .filter(u => u.balanceAction === 'discard')
+                .map(u => u.purSaleId)
+                .filter(id => id != null);
+            if (purSaleIds.length === 0) {
+                toast.info('No branches were excluded.');
+                return;
+            }
+            // For full_exclude: pass null brnchId; for single_exclude: pass the
+            // row's brnchId so the server can scope correctly.
+            const brnchId = mode === 'single_exclude'
+                ? (updates[0]?.branch ? (detailModal.item?.distribution?.find(d => d.purSaleId === updates[0].purSaleId)?.brnchId ?? null) : null)
+                : null;
+            const item = detailModal.isOpen ? detailModal.item : adjustmentModal.item;
+            await handleExcludeItem(item.id, null, brnchId, purSaleIds);
+            return;
+        }
+
+        if (mode === 'quantity_reduction') {
+            // For each update, apply the diff routing back into the full array.
+            // The "ignore" action means the user's reduced qty stands as-is
+            // (no further changes). The "move" action attaches the diff to a
+            // target trip — the server will handle the move when we send the
+            // newDistribution payload below.
+            const { item } = detailModal;
+            // Merge the per-row targetTrip / reducedQty from the modal back
+            // onto the distribution. For now we forward as-is and let the
+            // server's UpdateInvoice handler do the heavy lifting.
+            const tripId = currentTrip.id;
+            const targetTripByPurSale = {};
+            updates.forEach(u => {
+                if (u.balanceAction === 'move' && u.targetTrip) {
+                    targetTripByPurSale[u.purSaleId] = u.targetTrip;
+                }
+            });
+            const distribution = item.distribution.map(d => ({
+                purSaleId: d.purSaleId,
+                stockMastId: d.stockMastId,
+                originalQty: d.originalQty,
+                branch: d.branch,
+                qty: d.qty,
+                ...(targetTripByPurSale[d.purSaleId]
+                    ? { targetTrip: targetTripByPurSale[d.purSaleId] }
+                    : {}),
+            }));
+            setLoading({ state: true, text: 'Updating Trip Invoice...' });
+            try {
+                const result = await api.updateInvoice(item.id, tripId, distribution);
+                if (result.success) {
+                    toast.success(`Invoices updated for ${currentTrip.trip || currentTrip.name || ''}`);
+                    setDetailModal({ isOpen: false, item: null });
+                    await loadOrders(currentSection, currentTrip);
+                } else {
+                    toast.error(result.message);
+                }
+            } catch (error) {
+                toast.error('Failed to update invoice');
+            } finally {
+                setLoading({ state: false, text: '' });
+            }
+        }
+    };
+
+    const handleExcludeItem = async (itemId, branch = null, brnchId = null, purSaleIdsOverride = null) => {
         setLoading({ state: true, text: 'Excluding Item...' });
         try {
             // Find the item object from the latest state (either the open detail modal
             // or the list - the modal takes precedence as it may have edited distributions).
             const sourceItem = (detailModal.isOpen && detailModal.item && detailModal.item.id === itemId)
                 ? detailModal.item
-                : orderData.find(o => o.id === itemId || o.itemId === itemId);
+                : adjustmentModal.isOpen && adjustmentModal.item && adjustmentModal.item.id === itemId
+                    ? adjustmentModal.item
+                    : orderData.find(o => o.id === itemId || o.itemId === itemId);
             const stockMastId = sourceItem?.stockMastId ?? sourceItem?.StockMastId ?? null;
 
             // Build purSaleIds based on branch filter
             let purSaleIds = [];
-            if (sourceItem && Array.isArray(sourceItem.distribution)) {
+            if (Array.isArray(purSaleIdsOverride) && purSaleIdsOverride.length > 0) {
+                purSaleIds = purSaleIdsOverride.filter(id => id != null);
+            } else if (sourceItem && Array.isArray(sourceItem.distribution)) {
                 if (branch === null || branch === undefined) {
                     // All branches: every purSaleId for this stockMastId
                     purSaleIds = sourceItem.distribution
@@ -238,6 +342,12 @@ const Dashboard = () => {
                 }
             }
 
+            if (purSaleIds.length === 0) {
+                toast.error('No bill entries to exclude.');
+                setLoading({ state: false, text: '' });
+                return;
+            }
+
             const result = await api.excludeItem(
                 currentSection.id,
                 itemId,
@@ -250,6 +360,9 @@ const Dashboard = () => {
                 toast.success(result.message);
                 if (detailModal.isOpen) {
                     setDetailModal({ isOpen: false, item: null });
+                }
+                if (adjustmentModal.isOpen) {
+                    setAdjustmentModal(prev => ({ ...prev, isOpen: false }));
                 }
                 // Reload list to get updated distributions
                 await loadOrders(currentSection, currentTrip);
@@ -275,40 +388,51 @@ const Dashboard = () => {
     //     });
     // };
 
-    const handleExcludePop = (item, currentTrip, mode, purSaleId) =>{
-        
-        if(item === null || currentTrip === null || mode === null)
-            return;
-        
-        if(mode === "FE"){
-            
-            setAdjustmentModal({
-                isOpen:true,
-                item:item,
-                currentTrip:currentTrip,
-                trips:[],
-                mode:"full_exclude",
-                purSaleEntryData : item.distributions
-            })
+    // Opens the AdjustmentModal for an exclude action.
+    //   mode === "FE"  -> full exclude (all distributions of the item)
+    //   mode === "SE"  -> single exclude (one distribution matched by purSaleId)
+    // The modal needs the *current* trips list (so it can show the "Route to
+    // Target Trip" dropdown). We use the trips we already loaded for this
+    // section; if they're not loaded yet, we fetch them first.
+    const handleExcludePop = async (item, currentTrip, mode, purSaleId) => {
+        if (!item || !currentTrip || !mode) return;
 
-        }
-        else if(mode === "SE"){
-
-            const activeBillEntry = item.distributions.find(be=> be.purSaleId == purSaleId);
-            if(activeBillEntry === null)
+        let tripsForModal = trips;
+        if (!Array.isArray(tripsForModal) || tripsForModal.length === 0) {
+            if (!currentSection) {
+                toast.error('No section selected.');
                 return;
-
-            setAdjustmentModal({
-                isOpen:true,
-                item:item,
-                currentTrip:currentTrip,
-                trips:[],
-                mode:"full_exclude",
-                purSaleEntryData : activeBillEntry
-            })
+            }
+            try {
+                const fetched = await api.getTrips(currentSection.id);
+                tripsForModal = fetched.trips || [];
+                setTrips(tripsForModal);
+            } catch (error) {
+                toast.error('Failed to load trips');
+                return;
+            }
         }
-        else{
-            
+
+        if (mode === 'FE') {
+            setAdjustmentModal({
+                isOpen: true,
+                item,
+                currentTrip,
+                trips: tripsForModal,
+                mode: 'full_exclude',
+                filterPurSaleId: null,
+            });
+        } else if (mode === 'SE') {
+            // Use the modal's built-in filtering via filterPurSaleId — no need
+            // to find the entry here, the modal will pick the matching row.
+            setAdjustmentModal({
+                isOpen: true,
+                item,
+                currentTrip,
+                trips: tripsForModal,
+                mode: 'single_exclude',
+                filterPurSaleId: purSaleId ?? null,
+            });
         }
     };
 
@@ -476,7 +600,7 @@ const Dashboard = () => {
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        confirmExclude(item, null, null);
+                                                        handleExcludePop(item, currentTrip, "FE", null);
                                                     }}
                                                     className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-colors flex-shrink-0"
                                                     title="Exclude from all branches on this trip"
@@ -510,12 +634,18 @@ const Dashboard = () => {
                 onClose={() => setDetailModal({ isOpen: false, item: null })}
                 onUpdateQty={handleUpdateQty}
                 onSave={handleSaveInvoice}
-                onExcludeItem={(itemId, branch,brnchId) => confirmExclude(detailModal.item, branch, brnchId)}
+                onExcludeItem={(item, currentTrip, mode, dist) => handleExcludePop(item, currentTrip, "SE", dist.purSaleId)}
             />
 
             <AdjustmentModal
-                                                
-                                            />
+                isOpen={adjustmentModal.isOpen}
+                item={adjustmentModal.item}
+                currentTrip={adjustmentModal.currentTrip}
+                mode={adjustmentModal.mode}
+                filterPurSaleId={adjustmentModal.filterPurSaleId}
+                onClose={() => setAdjustmentModal(prev => ({ ...prev, isOpen: false }))}
+                onConfirm={handleAdjustmentConfirm}
+            />
             
         </>
     );

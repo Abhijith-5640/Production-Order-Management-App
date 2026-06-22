@@ -12,5 +12,6 @@ public sealed class DistributionEntry
     public int PurSaleId { get; init; }
     public int StockMastId { get; init; }
     public decimal OriginalQty { get; init; }
+    public int? TargetTrip { get; init; }
     public List<Trip> AvailableTrips { get; init; } = new();
 }
