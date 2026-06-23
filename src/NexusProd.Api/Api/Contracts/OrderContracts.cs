@@ -1,3 +1,5 @@
+using NexusProd.Api.Domain.Entities;
+
 namespace NexusProd.Api.Api.Contracts;
 
 public sealed record DistributionDto(
@@ -5,7 +7,8 @@ public sealed record DistributionDto(
     string Branch,
     int BrnchId,
     int Trip,
-    decimal Qty);
+    decimal Qty,
+    IReadOnlyList<Trip> availableTrips);
 
 public sealed record OrderItemDto(
     int Id,

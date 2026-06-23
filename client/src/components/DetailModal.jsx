@@ -5,8 +5,8 @@ const DetailModal = ({ isOpen, activeItem, currentTrip, onClose, onUpdateQty, on
     if (!isOpen || !activeItem) return null;
 
     const filteredDist = activeItem.distribution || [];
-    // const grandTotal = filteredDist.reduce((sum, dist) => sum + dist.qty, 0);
-    const grandTotal = activeItem.totalQty; // Use totalQty from the item instead of calculating from distribution
+    const grandTotal = filteredDist.reduce((sum, dist) => sum + dist.qty, 0);
+    
 
     return (
         <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">

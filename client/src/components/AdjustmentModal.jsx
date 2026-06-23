@@ -38,10 +38,11 @@ const AdjustmentModal = ({
         entries.forEach(d => {
             const candidates = (d.availableTrips ?? []).filter(t => t.id !== d.trip);
             initial[d.purSaleId] = {
-                // For FE / SE: default to fully excluded
-                // For QR: default to "move diff to next available trip" if one exists,
-                //         else ignore (exclude = true means ignore the diff)
-                exclude: mode === 'full_exclude' || mode === 'single_exclude' || candidates.length === 0,
+                // Default the exclude checkbox to checked only when there
+                // are no later trips available (forced exclude). When later
+                // trips exist, default to unchecked so the user can choose
+                // between excluding or routing to a target trip.
+                exclude: candidates.length === 0,
                 targetTrip: candidates.length > 0 ? candidates[0].id : ''
             };
         });

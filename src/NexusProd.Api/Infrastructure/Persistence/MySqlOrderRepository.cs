@@ -363,6 +363,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                       JOIN   inv21050 s   ON s.itm_mast_id = i.itm_mast_id
                       JOIN   inv21001 t   ON t.tax_id      = i.tax_id
                       JOIN   inv21071 r   ON r.stock_mast_id = s.stock_mast_id
+                                          AND r.base_rate = s.mrp
                       JOIN   inv00000 u   ON u.unit_id     = i.unit_id
                                           AND u.unit_id     = r.unit_id
                       JOIN   inv21070 tf  ON tf.tariff_id  = r.tariff_id
@@ -715,7 +716,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
             u.BrnchId,
             u.PurTmpltId,
             t.trip AS TripName,
-            t.trip_seq AS TripSequence
+            t.trip_seq AS TripSequence,
+            u.UnitName
         FROM (
             SELECT 
                 i.itm_mast_id    AS ItemId,
@@ -726,12 +728,14 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 bs.pur_sale_id   AS BillId,
                 bs.trip_no       AS Trip,
                 bs.pur_brnch_id AS BrnchId,
-                bs.pur_template_id AS PurTmpltId
+                bs.pur_template_id AS PurTmpltId,
+                un.symbol    AS UnitName
             FROM INV31065BS bs
             JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
             JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
             JOIN INV21050 s      ON s.stock_mast_id = bsd.stock_mast_id
             JOIN INV21010 i      ON s.itm_mast_id = i.itm_mast_id
+            JOIN INV00000 un      ON i.unit_id = un.unit_id
             JOIN CTGE1165pur b   ON bs.pur_brnch_id = b.brnch_id
             JOIN INV21013 pc     ON pc.itm_mast_id = i.itm_mast_id
                                 AND pc.prdt_cat_id = (
@@ -756,12 +760,14 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 bs.pur_sale_id   AS BillId,
                 bs.trip_no       AS Trip,
                 bs.pur_brnch_id AS BrnchId,
-                bs.pur_template_id AS PurTmpltId
+                bs.pur_template_id AS PurTmpltId,
+                un.symbol    AS UnitName
             FROM INV31065BS bs
             JOIN INV31065 sm     ON bs.sales_mast_id = sm.sales_mast_id
             JOIN INV31066 sd     ON sd.sales_mast_id = sm.sales_mast_id
             JOIN INV21050 s      ON s.stock_mast_id = sd.stock_mast_id
             JOIN INV21010 i      ON s.itm_mast_id = i.itm_mast_id
+            JOIN inv00000 un      ON i.unit_id = un.unit_id
             JOIN CTGE1165pur b   ON bs.pur_brnch_id = b.brnch_id
             JOIN INV21013 pc     ON pc.itm_mast_id = i.itm_mast_id
                                 AND pc.prdt_cat_id = (
@@ -784,15 +790,36 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 sql,
                 new { sectionId, tripId }, cancellationToken: cancellationToken))).ToList();
 
-            var tripsByTemplate = rows.Where(x => x.TripId != 0) // adjust/remove guard depending on whether TripId can be null/0 legitimately
-                                        .GroupBy(x => x.PurTmpltId)
-                                        .ToDictionary(
-                                            g => g.Key,
-                                            g => g.Select(x => new Trip { Id = x.TripId, Name = x.TripName, TripSeq = x.TripSequence })
-                                                  .DistinctBy(t => t.Id)
-                                                  .OrderBy(o => o.TripSeq)
-                                                  .ToList()
-                                        );
+            // Available trips per (pur_template_id, pur_brnch_id) — every trip
+            // that has any finalized INV31065BS row for this template + branch
+            // pair. The frontend filters out the row's own trip; the rest
+            // become candidates for carry-forward / exclude-rollover. Without
+            // this lookup, availableTrips collapses to just the current trip
+            // and the user has nothing to choose from.
+            var branchPairKeys = rows
+                .Where(x => x.PurTmpltId != 0 && x.BrnchId != 0)
+                .Select(x => new { x.PurTmpltId, x.BrnchId })
+                .Distinct()
+                .ToList();
+
+            var tripsByTemplate = new Dictionary<int, List<Trip>>();
+            foreach (var key in branchPairKeys)
+            {
+                var trips = await conn.QueryAsync<Trip>(new CommandDefinition(
+                    @"SELECT DISTINCT t.id        AS Id,
+                                      t.trip      AS Name,
+                                      t.trip_seq  AS TripSeq
+                      FROM   Trip t
+                      JOIN   inv31065bs bs ON bs.trip_no = t.id
+                      WHERE  bs.pur_template_id = @purTmpltId
+                        AND  bs.pur_brnch_id    = @purBrnchId
+                        AND  IFNULL(bs.is_finalized, 0) = 0
+                        AND  CAST(bs.createdDt AS DATE) = CAST(NOW() AS DATE)
+                      ORDER BY t.trip_seq ASC",
+                    new { purTmpltId = key.PurTmpltId, purBrnchId = key.BrnchId },
+                    cancellationToken: cancellationToken));
+                tripsByTemplate[key.PurTmpltId] = trips.ToList();
+            }
 
             var byItem = new Dictionary<int, OrderItem>();
             foreach (var row in rows)
@@ -805,7 +832,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         Name = row.Name,
                         StockMastId = row.StockMastId,
                         TotalQty = row.TotalQty,
-                        // Unit = row.Unit,
+                        Unit = row.UnitName,
                         IsCompleted = false,
                         Distribution = new List<DistributionEntry>()
 
@@ -815,6 +842,13 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                 tripsByTemplate.TryGetValue(row.PurTmpltId, out var availableTrips);
 
+                // Filter available trips to those with a trip_seq greater than
+                // the current row's trip_seq (i.e. later trips on the same day
+                // for this template/branch). The current trip is excluded by
+                // the strict greater-than comparison.
+                var laterTrips = (availableTrips ?? new List<Trip>())
+                    .Where(t => t.TripSeq > row.TripSequence)
+                    .ToList();
 
                 item.Distribution.Add(new DistributionEntry
                 {
@@ -823,7 +857,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     Trip = row.TripId,
                     Qty = Convert.ToDecimal(row.Qty),
                     BrnchId = row.BrnchId,
-                    AvailableTrips = availableTrips ?? new List<Trip>()
+                    AvailableTrips = laterTrips
                 });
                 // if (!ToBool(item.IsCompleted)) item = item with { IsCompleted = false };
                 byItem[row.StockMastId] = item;
@@ -990,7 +1024,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                           WHERE  pur_brnch_id  = @purBrnchId
                             AND  sale_brnch_id = @saleBrnchId
                             AND  trip_no       = @targetTrip
-                            AND  is_finalized <> 0
+                            AND  is_finalized = 0
                           LIMIT 1",
                         new { purBrnchId, saleBrnchId, targetTrip = d.TargetTrip.Value },
                         transaction: tx, cancellationToken: cancellationToken));
