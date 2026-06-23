@@ -34,11 +34,11 @@ public sealed class ExcludeItemHandler : IHandler<ExcludeItemCommand, string>
         // Single-item guard: for each purSaleId, verify the bill has at least
         // one other stock_mast_id (i.e. multiple items). If any bill carries
         // only this stockMastId, block the exclusion.
-        var singleItemBill = await _orders.FindSingleItemBillAsync(
-            request.PurSaleIds, request.StockMastId, cancellationToken);
+        // var singleItemBill = await _orders.FindSingleItemBillAsync(
+        //     request.PurSaleIds, request.StockMastId, cancellationToken);
 
-        if (singleItemBill is not null)
-            return Error.InvalidInput($"Bill {singleItemBill.Value.PurSaleId} contains only this item and cannot be excluded.");
+        // if (singleItemBill is not null)
+        //     return Error.InvalidInput($"Bill {singleItemBill.Value.PurSaleId} contains only this item and cannot be excluded.");
 
         try
         {

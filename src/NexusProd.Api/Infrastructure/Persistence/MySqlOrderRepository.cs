@@ -954,6 +954,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     continue;
                 }
 
+
                 // (D) COMPUTE NEW VALUES — rate-based, no discount.
                 // grs_amt = sales_rate * newSalesQty; cgst/sgst/cess derive directly from grs_amt.
                 // tax_amt uses tax_per when present, else falls back to sum of cgst + sgst + cess.
@@ -1155,6 +1156,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                     carriedForward++;
                 }
+
             }
 
             // (F) MASTER ROLLUP — one UPDATE per unique (masterId, isTransfer).
