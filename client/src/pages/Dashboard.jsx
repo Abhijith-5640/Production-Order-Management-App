@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
-import { Factory, LogOut, Layers, Truck, ChevronDown, Check, PackageSearch, Ban, ClipboardList } from 'lucide-react';
+import { Factory, LogOut, Layers, Truck, ChevronDown, Check, PackageSearch, Ban, ClipboardList, AlertTriangle } from 'lucide-react';
 
 import { api } from '../services/api';
 import FullScreenLoader from '../components/FullScreenLoader';
@@ -25,8 +25,13 @@ const Dashboard = () => {
     // Modals
     const [pickerConfig, setPickerConfig] = useState({ isOpen: false, type: 'section' }); // 'section' | 'trip'
     const [detailModal, setDetailModal] = useState({ isOpen: false, item: null });
-    // const [excludeConfirm, setExcludeConfirm] = useState({ isOpen: false, itemId: null, branch: null, brnchId: null, itemName: '', branchName: '', item: null });
     const [adjustmentModal, setAdjustmentModal] = useState({ isOpen: false, item: null, currentTrip: null, trips: null, mode: null, filterPurSaleId: null });
+    // Discard-qty-changes confirmation. Shown when the user clicks exclude on a
+    // distribution row in DetailModal whose qty has been edited via +/- but
+    // not yet saved. Two buttons: Cancel (close, no change) and Discard
+    // (reset qty to originalQty, then proceed to the exclude flow).
+    const [discardConfirm, setDiscardConfirm] = useState({ isOpen: false, item: null, currentTrip: null, dist: null, distIdx: null });
+    
 
     // Add initial loading logic similar to confirming action in old code
     const [showConfirm, setShowConfirm] = useState(false);
@@ -244,12 +249,25 @@ const Dashboard = () => {
         const mode = adjustmentModal.mode;
 
         if (mode === 'full_exclude' || mode === 'single_exclude') {
-            // Collect purSaleIds of rows the user chose to exclude
-            const purSaleIds = updates
-                .filter(u => u.balanceAction === 'discard')
-                .map(u => u.purSaleId)
-                .filter(id => id != null);
-            if (purSaleIds.length === 0) {
+            // Collect per-row entries of rows the user chose to exclude. Each
+            // entry carries the qty (reset to originalQty by the modal's dirty-
+            // qty guard if applicable) and an optional targetTrip picked from
+            // the dropdown. When "Fully Exclude" is checked, targetTrip is
+            // forced to null inside the modal so the server fully discards.
+            // Forward BOTH discard and move rows. In FE/SE mode the modal emits
+            // 'discard' when the row's "Fully Exclude" checkbox is ticked, and
+            // 'move' when the user chose to route the row to a later trip (the
+            // server's ExcludeItemAsync handles targetTrip carry-forward the same
+            // way UpdateInvoiceAsync does — see MySqlOrderRepository).
+            const entries = updates
+                .filter(u => u.balanceAction === 'discard' || u.balanceAction === 'move')
+                .map(u => ({
+                    purSaleId: u.purSaleId,
+                    qty: u.qty,
+                    targetTrip: u.balanceAction === 'move' ? (u.targetTrip ?? null) : null,
+                }))
+                .filter(e => e.purSaleId != null);
+            if (entries.length === 0) {
                 toast.info('No branches were excluded.');
                 return;
             }
@@ -259,7 +277,7 @@ const Dashboard = () => {
                 ? (updates[0]?.branch ? (detailModal.item?.distribution?.find(d => d.purSaleId === updates[0].purSaleId)?.brnchId ?? null) : null)
                 : null;
             const item = detailModal.isOpen ? detailModal.item : adjustmentModal.item;
-            await handleExcludeItem(item.id, null, brnchId, purSaleIds);
+            await handleExcludeItem(item.id, null, brnchId, entries);
             return;
         }
 
@@ -308,7 +326,7 @@ const Dashboard = () => {
         }
     };
 
-    const handleExcludeItem = async (itemId, branch = null, brnchId = null, purSaleIdsOverride = null) => {
+    const handleExcludeItem = async (itemId, branch = null, brnchId = null, entriesOverride = null) => {
         setLoading({ state: true, text: 'Excluding Item...' });
         try {
             // Find the item object from the latest state (either the open detail modal
@@ -320,16 +338,21 @@ const Dashboard = () => {
                     : orderData.find(o => o.id === itemId || o.itemId === itemId);
             const stockMastId = sourceItem?.stockMastId ?? sourceItem?.StockMastId ?? null;
 
-            // Build purSaleIds based on branch filter
-            let purSaleIds = [];
-            if (Array.isArray(purSaleIdsOverride) && purSaleIdsOverride.length > 0) {
-                purSaleIds = purSaleIdsOverride.filter(id => id != null);
+            // Build entries based on branch filter. Each entry carries purSaleId,
+            // qty and an optional targetTrip that the user selected in the modal.
+            let entries = [];
+            if (Array.isArray(entriesOverride) && entriesOverride.length > 0) {
+                entries = entriesOverride.filter(e => e && e.purSaleId != null);
             } else if (sourceItem && Array.isArray(sourceItem.distribution)) {
                 if (branch === null || branch === undefined) {
                     // All branches: every purSaleId for this stockMastId
-                    purSaleIds = sourceItem.distribution
-                        .map(d => d.purSaleId)
-                        .filter(id => id !== undefined && id !== null);
+                    entries = sourceItem.distribution
+                        .filter(d => d.purSaleId != null)
+                        .map(d => ({
+                            purSaleId: d.purSaleId,
+                            qty: d.originalQty ?? d.qty,
+                            targetTrip: null,
+                        }));
                 } else {
                     // Single branch: match by brnchId (preferred) or by branch name
                     const match = sourceItem.distribution.find(d =>
@@ -337,12 +360,16 @@ const Dashboard = () => {
                         (branch && d.branch === branch)
                     );
                     if (match && match.purSaleId != null) {
-                        purSaleIds = [match.purSaleId];
+                        entries = [{
+                            purSaleId: match.purSaleId,
+                            qty: match.originalQty ?? match.qty,
+                            targetTrip: null,
+                        }];
                     }
                 }
             }
 
-            if (purSaleIds.length === 0) {
+            if (entries.length === 0) {
                 toast.error('No bill entries to exclude.');
                 setLoading({ state: false, text: '' });
                 return;
@@ -354,7 +381,7 @@ const Dashboard = () => {
                 currentTrip.id,
                 stockMastId,
                 brnchId,
-                purSaleIds
+                entries
             );
             if (result.success) {
                 toast.success(result.message);
@@ -376,17 +403,6 @@ const Dashboard = () => {
         }
     };
 
-    // const confirmExclude = (item, branch = null, brnchId) => {
-    //     setExcludeConfirm({
-    //         isOpen: true,
-    //         itemId: item.id,
-    //         branch: branch,
-    //         itemName: item.name,
-    //         brnchId: brnchId,
-    //         branchName: branch || 'All Branches',
-    //         item: item,
-    //     });
-    // };
 
     // Opens the AdjustmentModal for an exclude action.
     //   mode === "FE"  -> full exclude (all distributions of the item)
@@ -436,6 +452,34 @@ const Dashboard = () => {
         }
     };
 
+    // Reset the dirty row's qty to originalQty inside the open DetailModal,
+    // close the discard confirm, and proceed to handleExcludePop with the
+    // restored item so the user can complete the exclude as if the qty
+    // had never been edited.
+    const handleDiscardChanges = () => {
+        const { item, distIdx, dist, currentTrip } = discardConfirm;
+        if (!item || distIdx == null || distIdx < 0 || !dist) {
+            setDiscardConfirm({ isOpen: false, item: null, currentTrip: null, dist: null, distIdx: null });
+            return;
+        }
+        const updatedItem = { ...item };
+        updatedItem.distribution = (updatedItem.distribution || []).map((d, i) =>
+            i === distIdx ? { ...d, qty: Number(d.originalQty ?? d.qty) } : d
+        );
+        setDetailModal(prev => ({ ...prev, item: updatedItem }));
+        const purSaleId = dist.purSaleId;
+        setDiscardConfirm({ isOpen: false, item: null, currentTrip: null, dist: null, distIdx: null });
+        if (purSaleId != null) {
+            handleExcludePop(updatedItem, currentTrip, "SE", purSaleId);
+        }
+    };
+
+    // Just close the discard confirm — leave the dirty qty as the user
+    // typed it; do not open AdjustmentModal.
+    const handleCancelDiscard = () => {
+        setDiscardConfirm({ isOpen: false, item: null, currentTrip: null, dist: null, distIdx: null });
+    };
+
     return (
         <>
             <FullScreenLoader isVisible={loading.state} text={loading.text} />
@@ -466,33 +510,43 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Exclude Confirm Modal
-            {excludeConfirm.isOpen && (
+            {/* Discard qty changes confirmation — shown when the user clicks
+                exclude on a row in DetailModal whose qty has been edited via
+                +/- but not yet saved. */}
+            {discardConfirm.isOpen && (
                 <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"></div>
                     <div className="relative bg-white w-full max-w-sm rounded-[2rem] shadow-2xl p-8 text-center animate-in zoom-in duration-150 border border-slate-100">
-                        <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 bg-red-50 text-red-500">
-                            <Ban className="w-10 h-10" />
+                        <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 bg-amber-50 text-amber-500">
+                            <AlertTriangle className="w-10 h-10" />
                         </div>
-                        <h3 className="text-xl font-bold text-slate-800 mb-2">Exclude Item?</h3>
-                        <p className="text-slate-500 text-sm mb-2">Are you sure you want to exclude <strong>{excludeConfirm.itemName}</strong>?</p>
-                        <p className="text-slate-400 text-xs mb-8">Branch: <span className="font-bold text-slate-600">{excludeConfirm.branchName}</span></p>
-
+                        <h3 className="text-xl font-bold text-slate-800 mb-2">Quantity Mismatch Found</h3>
+                        <p className="text-slate-500 text-sm mb-2">
+                            The quantity for <strong>{discardConfirm.dist?.branch}</strong> has been edited.
+                        </p>
+                        <p className="text-slate-400 text-xs mb-8">
+                            Current: <span className="font-bold text-slate-600">{discardConfirm.dist?.qty}</span>
+                            <span className="mx-1">·</span>
+                            Original: <span className="font-bold text-slate-600">{discardConfirm.dist?.originalQty}</span>
+                        </p>
+                        <p className="text-slate-500 text-xs mb-8 -mt-4">
+                            To proceed with exclude, either save the invoice first or discard the quantity changes.
+                        </p>
                         <div className="flex gap-3">
                             <button
-                                onClick={() => setExcludeConfirm({ isOpen: false, itemId: null, branch: null, brnchId: null, itemName: '', branchName: '', item: null })}
+                                onClick={handleCancelDiscard}
                                 className="flex-1 py-4 bg-slate-100 text-slate-500 font-bold rounded-2xl border-none">
                                 Cancel
                             </button>
                             <button
-                                onClick={() => handleExcludeItem(excludeConfirm.itemId, excludeConfirm.branch, excludeConfirm.brnchId)}
-                                className="flex-1 py-4 bg-red-500 hover:bg-red-600 text-white font-bold rounded-2xl shadow-lg shadow-red-200 border-none transition-colors">
-                                Exclude
+                                onClick={handleDiscardChanges}
+                                className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-700  text-white font-bold rounded-2xl shadow-xl hover:shadow-indigo-100 border-none transition-all flex items-center justify-center gap-2">
+                                Discard
                             </button>
                         </div>
                     </div>
                 </div>
-            )} */}
+            )}
 
             {/* Navbar */}
             <nav className="glass-header sticky top-0 z-40 px-6 py-3 flex justify-between items-center bg-white/80 backdrop-blur-xl border-b border-slate-200">
@@ -634,7 +688,26 @@ const Dashboard = () => {
                 onClose={() => setDetailModal({ isOpen: false, item: null })}
                 onUpdateQty={handleUpdateQty}
                 onSave={handleSaveInvoice}
-                onExcludeItem={(item, currentTrip, mode, dist) => handleExcludePop(item, currentTrip, "SE", dist.purSaleId)}
+                onExcludeItem={(item, currentTrip, mode, dist) => {
+                    // Find the row's index in the (possibly edited) distribution
+                    // array — the `dist` argument is the row as of the time the
+                    // row was rendered; the latest edits live on item.distribution.
+                    const distIdx = (item.distribution || []).findIndex(d => d.purSaleId === dist.purSaleId);
+                    const live = distIdx >= 0 ? item.distribution[distIdx] : dist;
+                    if (Number(live.qty) !== Number(live.originalQty ?? live.qty)) {
+                        // Dirty qty: ask the user to discard or cancel before
+                        // opening the heavier AdjustmentModal.
+                        setDiscardConfirm({
+                            isOpen: true,
+                            item,
+                            currentTrip,
+                            dist: live,
+                            distIdx,
+                        });
+                        return;
+                    }
+                    handleExcludePop(item, currentTrip, "SE", dist.purSaleId);
+                }}
             />
 
             <AdjustmentModal

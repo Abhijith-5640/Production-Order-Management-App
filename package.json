@@ -2,15 +2,12 @@
     "name": "production-order-management-app",
     "version": "1.0.0",
     "description": "Full stack production order management app",
-    "main": "index.js",
     "scripts": {
-        "start": "node scripts/start.js",
-        "install-all": "npm install --prefix server && npm install --prefix client",
+        "install:client": "npm install --prefix client",
         "build:client": "npm run build --prefix client",
-        "build:exe": "npm run build:client && node scripts/build.js"
-    },
-    "devDependencies": {
-        "pkg": "^5.8.1"
+        "dev:client": "npm run dev --prefix client",
+        "dev:api": "dotnet run --project src/NexusProd.Api",
+        "publish:api": "dotnet publish src/NexusProd.Api -c Release -r win-x64"
     },
     "author": "",
     "license": "ISC"

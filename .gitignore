@@ -4,7 +4,6 @@
 # This project is a polyglot repo:
 #   * .NET 8 API            (src/NexusProd.Api)        -> bin/, obj/, wwwroot/
 #   * React + Vite client   (client/)                  -> client/dist/
-#   * Node legacy bridge    (server/, scripts/)        -> node_modules/
 #   * Vite build artifact   (client/dist -> wwwroot)   -> src/NexusProd.Api/wwwroot/
 #
 # Keep this file the single source of truth for "do not commit" patterns.
@@ -14,10 +13,12 @@
 # ============================================================
 # Secrets — NEVER commit
 # ============================================================
-# db_config.json holds plaintext MySQL credentials. Tracked historically
-# with default credentials; if you must re-include it, rotate the password
-# first and document the rotation in DEPLOYMENT_GUIDE.md.
-server/db_config.json
+# db_config.json holds plaintext MySQL credentials. It is created next to
+# the published API exe on first run from src/NexusProd.Api/Resources/
+# default_db_config.json — never commit a populated one. The .NET API
+# also honors a project-local db_config.json for development.
+db_config.json
+**/db_config.json
 
 # Generic .env files
 .env
@@ -73,14 +74,11 @@ _ReSharper*/
 *.[Rr]e[Ss]harper
 
 # ============================================================
-# Node / npm / pkg — dependency trees and packager output
+# Node / npm — dependency trees
 # ============================================================
 node_modules/
 **/node_modules/
 
-# pkg (the packager that turns the server into nexus-prod.exe) drops its
-# single-file output at the repo root
-dist/
 *.exe.local
 
 # ============================================================

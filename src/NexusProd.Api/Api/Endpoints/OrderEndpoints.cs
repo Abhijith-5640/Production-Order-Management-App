@@ -49,13 +49,38 @@ public static class OrderEndpoints
 
         group.MapPost("/exclude", async (ExcludeRequest req, IHandler<ExcludeItemCommand, string> h, CancellationToken ct) =>
         {
+            // Map each per-row ExcludeEntry into the domain DistributionEntry. The
+            // server-side ExcludeItemAsync mirrors UpdateInvoiceAsync — it uses
+            // d.Qty and d.OriginalQty to decide between DELETE and UPDATE on the
+            // source row, then routes the diff to d.TargetTrip if provided.
+            //
+            // OriginalQty is set to e.Qty here: the UI's dirty-qty guard ensures
+            // the qty sent from the modal always equals the original qty of the
+            // row (any unsaved qty changes are either reset to original or block
+            // the exclusion with a confirmation). With OriginalQty == Qty, the
+            // server takes the "full row exclude" DELETE path. The OriginalQty
+            // field is kept equal to Qty to satisfy the invariant that the
+            // "Qty == OriginalQty → skip" filter in UpdateInvoiceAsync sees
+            // a clean no-op for this case.
+            var dist = (req.Entries ?? Array.Empty<ExcludeEntry>())
+                .Select(e => new Domain.Entities.DistributionEntry
+                {
+                    PurSaleId = e.PurSaleId,
+                    StockMastId = req.StockMastId,
+                    OriginalQty = e.Qty,
+                    Branch = string.Empty,
+                    Trip = req.CurrentTrip,
+                    Qty = e.Qty,
+                    TargetTrip = e.TargetTrip,
+                })
+                .ToList();
             var r = await h.HandleAsync(new ExcludeItemCommand(
                 req.SectionId,
                 req.ItemId,
                 req.CurrentTrip,
                 req.StockMastId,
                 req.BrnchId,
-                req.PurSaleIds ?? Array.Empty<int>()), ct);
+                dist), ct);
             return r.ToHttp(msg => Results.Ok(new ExcludeResponse(true, msg)));
         });
     }

@@ -6,9 +6,10 @@ namespace NexusProd.Api.Application.Abstractions;
 public sealed record SectionsLookup(int CategoryId, IReadOnlyList<SectionDto> Sections);
 
 /// <summary>
-/// Repository abstraction for orders. All methods are 1:1 ports of the
-/// raw SQL blocks in the legacy Express server (see
-/// <c>server/db/mysql_db.js</c>).
+/// Repository abstraction for orders. The MySQL implementation is a 1:1
+/// port of the raw SQL blocks from the original Node/Express bridge that
+/// previously lived in <c>server/db/mysql_db.js</c> (that folder has been
+/// removed; the .NET API is the sole backend).
 /// </summary>
 public interface IOrderRepository
 {
@@ -62,12 +63,17 @@ public interface IOrderRepository
     Task<string> UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Excludes the matching <c>sales_details</c> for the current trip
-    /// (and optionally a single branch), and rolls the qty over to the
-    /// next chronologically active trip's invoice (creating a new
-    /// <c>sales_master</c> if needed). Returns the human-readable message
-    /// the Express API returns ("Excluded ... Rolled over to ...").
-    /// Transactional.
+    /// Per-row exclude / rollover. For each <see cref="DistributionEntry"/>:
+    /// looks up the master via <c>INV31065BS</c> (sale vs. transfer), and
+    /// either DELETEs the matching detail row from <c>INV31066</c> /
+    /// <c>INV31066BSD</c> (when <c>Qty == OriginalQty</c>) or UPDATEs the
+    /// row in place with recomputed amounts (defensive, partial-qty path).
+    /// When <c>TargetTrip</c> is supplied, the diff is also routed to that
+    /// trip's bill — INSERT if no detail row exists there, otherwise UPDATE
+    /// adding the diff. <c>INV21085</c> is intentionally not touched on
+    /// either path. Master totals are rolled up via SUM subqueries at the
+    /// end. Returns a "{updated} updated, {skipped} skipped, {carriedForward}
+    /// carried forward, {carrySkipped} carry skipped" summary. Transactional.
     /// </summary>
     Task<string> ExcludeItemAsync(
         int sectionId,
@@ -75,23 +81,6 @@ public interface IOrderRepository
         int stockMastId,
         int currentTripId,
         int? brnchId,
-        IReadOnlyList<int> purSaleIds,
-        CancellationToken cancellationToken);
-
-    /// <summary>
-    /// Guard for the exclude flow. For each <paramref name="purSaleIds"/>
-    /// entry, looks up the matching <c>INV31065BS</c> row, resolves the
-    /// <c>sales_mast_id</c> + <c>is_for_transfer</c> pair to the right
-    /// detail table (<c>INV31066</c> for sale, <c>INV31066BSD</c> for
-    /// transfer), and counts the distinct <c>stock_mast_id</c> values in
-    /// that bill. Returns the first <c>(purSaleId, distinctCount)</c>
-    /// pair whose distinct count is exactly 1 — meaning that bill carries
-    /// only the requested <paramref name="stockMastId"/> and cannot be
-    /// excluded. Returns <c>null</c> when every touched bill has at
-    /// least one other <c>stock_mast_id</c> (safe to exclude).
-    /// </summary>
-    Task<(int PurSaleId, int DistinctCount)?> FindSingleItemBillAsync(
-        IReadOnlyList<int> purSaleIds,
-        int stockMastId,
+        IReadOnlyList<DistributionEntry> entries,
         CancellationToken cancellationToken);
 }

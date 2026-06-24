@@ -5,64 +5,75 @@
 
 ## Technology Stack
 - **Frontend/Client**: React 19, Vite, Tailwind CSS (v4), React Router DOM (v7), and Lucide-React for modern icons.
-- **Backend/Server**: Node.js, Express.js, MySQL Promise wrapper.
-- **Database**: MySQL Server (supported with a robust Mock DB fallback for rapid offline testing).
-- **Tooling**: Concurrently handles both client and server startup via a custom Node script.
+- **Backend/Server**: .NET 8 Web API (Kestrel, JWT bearer auth, Dapper + MySqlConnector for MySQL access).
+- **Database**: MySQL Server (the connection settings live in `db_config.json` next to the published API exe).
+- **Tooling**: Vite for client dev/build, `dotnet run` for API dev, `dotnet publish` for production builds.
 
 ## Project Structure
 ```text
 production-order-management-app/
 │
 ├── client/                     # React + Vite Frontend
-│   ├── src/                    
+│   ├── src/
 │   │   ├── components/         # Reusable UI components (Loader, Modals)
 │   │   ├── pages/              # App routes (Login, Dashboard)
 │   │   ├── services/           # API fetch wrappers (api.js)
 │   │   └── index.css           # Tailwind injection point
-│   └── package.json            
-│
-├── server/                     # Express Backend
-│   ├── db/                     # DB Logic (mysql_db.js, mock_db.js, index.js router)
-│   ├── db_config.json          # Active database connection config & mock toggle
-│   ├── server.js               # Express application and API routers
 │   └── package.json
 │
-├── scripts/                    
-│   └── start.js                # Shell script to boot client and server in parallel
+├── src/NexusProd.Api/          # ASP.NET Core 8 API (single-file publish)
+│   ├── Api/                    #   Minimal-API endpoints + contracts
+│   ├── Application/            #   Use-case handlers, abstractions
+│   ├── Domain/                 #   Entities
+│   ├── Infrastructure/         #   Dapper/MySQL repos, security, DI
+│   ├── Updater/                #   Background self-updater service
+│   └── wwwroot/                #   Built SPA (emitted by Vite)
 │
-└── package.json                # Root package manager handling global scripts
+├── MySQL_Assets/               # Schema + seed data (prod_app_db_meta_data.sql)
+│
+└── package.json                # Root npm scripts (client build/dev only)
 ```
 
 ## Setup & Installation
 
-**Prerequisites:** Node.js and MySQL Server installed on your machine.
+**Prerequisites:** .NET 8 SDK, Node.js (for the Vite client), and MySQL Server.
 
 1. **Database Setup:**
-   Before running the application, import the database schema and metadata initialization script into your MySQL Server. The SQL setup file is located at [prod_app_db_meta_data.sql](root/MySQL_Assets/prod_app_db_meta_data.sql).
-   
+   Before running the application, import the database schema and seed data into your MySQL Server. The SQL setup file is [MySQL_Assets/prod_app_db_meta_data.sql](MySQL_Assets/prod_app_db_meta_data.sql).
+
    Import the script via your MySQL CLI tool or database explorer (this creates the database `prod_app` and all tables/data):
    ```bash
    mysql -u root -p < MySQL_Assets/prod_app_db_meta_data.sql
    ```
 
 2. **Install Dependencies:**
-   From the root folder, run the global installation command to install both frontend and backend dependencies at once:
    ```bash
-   npm run install-all
+   npm run install:client   # installs the React/Vite client
+   dotnet restore          # restores the .NET API packages
    ```
 
-3. **Start the Application:**
-   Run the following command in the root folder to boot both the server (Port 5000) and the client (Vite network port):
+3. **Start the Application (development):**
+   Run the API and the client in two terminals:
    ```bash
-   npm start
+   # Terminal 1 — .NET API (port 5099)
+   npm run dev:api
+
+   # Terminal 2 — Vite dev server
+   npm run dev:client
+   ```
+
+4. **Build for production:**
+   ```bash
+   npm run build:client    # builds the React SPA into src/NexusProd.Api/wwwroot
+   npm run publish:api     # dotnet publish -c Release -r win-x64
    ```
 
 ## Complete Application Workflow
 
 ### 1. Database Configuration & Login
 - **Configuration Panel:** On the Login Page, the user has the option to click **Database Configuration**. This opens a modal to input MySQL connection details (Host, Port, DB Name, User, Password).
-- **Test & Save:** Users can test the connection in real-time. Once successful, saving writes the credentials and the `use_mock_db=false` flag directly to the server's `db_config.json`.
-- **Login Authentication:** After configuration, the user logs in. Upon successful verification, the app sets a local authentication token and redirects to the **Dashboard**.
+- **Test & Save:** Users can test the connection in real-time. Once successful, saving writes the credentials and the `use_mock_db=false` flag directly to the API's `db_config.json` (next to the published exe).
+- **Login Authentication:** After configuration, the user logs in. The server returns a short-lived JWT access token (held in JS memory) and a long-lived refresh token set as an HttpOnly cookie (`Secure` over HTTPS). The Dashboard then makes every subsequent call with the access token in the `Authorization` header; the refresh cookie is used silently to rotate the access token when it expires.
 
 ### 2. Initial Dashboard Load (Invoice Generation)
 - **Pending Orders Check:** When the dashboard loads, the system checks for any new, non-billed orders for the current day.

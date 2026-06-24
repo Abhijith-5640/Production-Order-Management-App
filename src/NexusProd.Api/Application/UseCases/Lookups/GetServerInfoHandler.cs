@@ -33,7 +33,7 @@ public sealed class GetServerInfoHandler : IHandler<GetServerInfoQuery, ServerIn
             ServerTime: _clock.UtcNow,
             Uptime: _clock.UtcNow - _startedAt,
             LanAddresses: addresses,
-            Port: 5000);
+            Port: 5099);
         return Task.FromResult(Result<ServerInfoView>.Success(info));
     }
 

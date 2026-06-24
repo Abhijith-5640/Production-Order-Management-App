@@ -41,12 +41,17 @@ public sealed record UpdateOrderDistributionDto(
 
 public sealed record UpdateOrderResponse(bool Success, string Message);
 
+public sealed record ExcludeEntry(
+    int PurSaleId,
+    decimal Qty,
+    int? TargetTrip = null);
+
 public sealed record ExcludeRequest(
     int SectionId,
     int ItemId,
     int CurrentTrip,
     int StockMastId,
     int? BrnchId,
-    IReadOnlyList<int> PurSaleIds);
+    IReadOnlyList<ExcludeEntry> Entries);
 
 public sealed record ExcludeResponse(bool Success, string Message);

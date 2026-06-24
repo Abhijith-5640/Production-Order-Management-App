@@ -88,20 +88,4 @@ public sealed class MySqlUserRepository : IUserRepository
             throw;
         }
     }
-
-    public async Task UpdatePasswordHashAsync(int userId, string hash, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await using var conn = await _factory.OpenAsync(cancellationToken);
-            const string sql = "UPDATE user_master SET user_pass_hash = @hash WHERE user_id = @id";
-            var cmd = new CommandDefinition(sql, new { hash, id = userId }, cancellationToken: cancellationToken);
-            await conn.ExecuteAsync(cmd);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "UpdatePasswordHashAsync failed for userId {UserId}", userId);
-            throw;
-        }
-    }
 }

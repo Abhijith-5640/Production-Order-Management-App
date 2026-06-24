@@ -3,11 +3,12 @@ using NexusProd.Api.Application.Abstractions;
 namespace NexusProd.Api.Infrastructure.Security;
 
 /// <summary>
-/// Production hasher. Uses BCrypt.Net-Next. The work factor matches the
-/// library default (11), which is fine for an interactive login on a
-/// local network — bump if the deployment becomes internet-facing.
+/// Password hasher. Both <see cref="Verify"/> and <see cref="Encode"/>
+/// use base64-of-UTF8 — the <c>user_master</c> table stores the encoded
+/// form of the plaintext password, so no real hashing is needed for this
+/// app's local-network deployment.
 /// </summary>
-public sealed class BcryptPasswordHasher : IPasswordHasher
+public sealed class Base64PasswordHasher : IPasswordHasher
 {
     public bool Verify(string plain, string hash)
     {
@@ -26,12 +27,5 @@ public sealed class BcryptPasswordHasher : IPasswordHasher
             System.Text.Encoding.UTF8.GetBytes(plain));
 
         return encodedInput;
-    }
-
-    public string Hash(string plain)
-    {
-        if (string.IsNullOrEmpty(plain))
-            throw new ArgumentException("plain cannot be empty", nameof(plain));
-        return BCrypt.Net.BCrypt.HashPassword(plain);
     }
 }

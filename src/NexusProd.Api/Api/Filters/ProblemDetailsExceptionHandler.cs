@@ -1,12 +1,13 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
-using NexusProd.Api.Application.Common;
 
 namespace NexusProd.Api.Api.Filters;
 
 /// <summary>
-/// Global exception handler. Translates <see cref="ValidationException"/>
-/// into 400 and everything else into 500 with a stable shape.
+/// Global exception handler. Every unhandled exception is translated to
+/// HTTP 500 with a stable problem-details shape. Handlers are expected to
+/// validate input and return <see cref="Error.InvalidInput"/> rather than
+/// throwing, so the 400 path lives at the use-case boundary instead.
 /// </summary>
 public sealed class ProblemDetailsExceptionHandler : IExceptionHandler
 {
@@ -17,26 +18,12 @@ public sealed class ProblemDetailsExceptionHandler : IExceptionHandler
     {
         _logger.LogError(exception, "Unhandled exception on {Path}", httpContext.Request.Path);
 
-        ProblemDetails problem;
-        switch (exception)
+        var problem = new ProblemDetails
         {
-            case ValidationException vex:
-                problem = new ProblemDetails
-                {
-                    Status = StatusCodes.Status400BadRequest,
-                    Title = "Validation failed",
-                    Detail = vex.Message
-                };
-                break;
-            default:
-                problem = new ProblemDetails
-                {
-                    Status = StatusCodes.Status500InternalServerError,
-                    Title = "Server error",
-                    Detail = exception.Message
-                };
-                break;
-        }
+            Status = StatusCodes.Status500InternalServerError,
+            Title = "Server error",
+            Detail = exception.Message
+        };
 
         httpContext.Response.StatusCode = problem.Status ?? 500;
         httpContext.Response.ContentType = "application/problem+json";

@@ -76,6 +76,9 @@ const AdjustmentModal = ({
     };
 
     const handleSave = () => {
+        const isExcludeMode = mode === 'full_exclude' || mode === 'single_exclude';
+
+        // Build the per-row updates first.
         const updates = purSaleEntries.map(entry => {
             const config = localAdjustments[entry.purSaleId] || {};
             const isQtyReduction = mode === 'quantity_reduction';
@@ -86,15 +89,42 @@ const AdjustmentModal = ({
                 purSaleId: entry.purSaleId,
                 branch: entry.branch,
                 qty: entry.qty,
+                originalQty: entry.originalQty ?? entry.qty,
                 reducedQty: isQtyReduction ? reducedQty : null,
                 // For QR: "exclude" on the diff means ignore the diff (no move, no discard)
                 // For FE/SE: "exclude" means fully exclude this row
                 balanceAction: isQtyReduction
                     ? (config.exclude ? 'ignore' : 'move')
                     : (config.exclude ? 'discard' : 'move'),
-                targetTrip: config.targetTrip || null
+                // When fully-exclude is checked the target trip is meaningless — the
+                // exclude will discard the row entirely. Force null so the call site
+                // never sends a targetTrip for a discarded row.
+                targetTrip: config.exclude ? null : (config.targetTrip || null)
             };
         });
+
+        // Dirty-qty guard: in FE/SE mode the user must not be able to exclude a
+        // row whose qty was edited in DetailModal but not yet saved. If we find
+        // any such row, ask the user to either discard the qty change (reset
+        // back to originalQty) or cancel the whole action.
+        if (isExcludeMode) {
+            const dirtyRows = updates.filter(u =>
+                Number(u.qty) !== Number(u.originalQty));
+            if (dirtyRows.length > 0) {
+                const proceed = window.confirm(
+                    `${dirtyRows.length} row(s) have unsaved quantity changes. ` +
+                    `Excluding them now will discard those changes and use the original quantity.\n\n` +
+                    `Click OK to discard the quantity changes and proceed with exclusion.\n` +
+                    `Click Cancel to keep the changes (no exclusion will happen).`
+                );
+                if (!proceed) {
+                    return; // user cancelled — close the modal, no server call
+                }
+                // Reset qty to originalQty for dirty rows.
+                dirtyRows.forEach(d => { d.qty = d.originalQty; });
+            }
+        }
+
         onConfirm(updates);
     };
 

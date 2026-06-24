@@ -24,11 +24,4 @@ public interface IUserRepository
     /// match the current user record.
     /// </summary>
     Task<User?> FindByIdAsync(int userId, CancellationToken cancellationToken);
-
-    /// <summary>
-    /// Persists the bcrypt hash for the given user. Called by the login
-    /// flow the first time a legacy plain-text user authenticates, so the
-    /// transparent migration can finish without an out-of-band script.
-    /// </summary>
-    Task UpdatePasswordHashAsync(int userId, string hash, CancellationToken cancellationToken);
 }

@@ -75,16 +75,37 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
         options.Events = new JwtBearerEvents
         {
+            // Detect token expiration during authentication but DO NOT write
+            // the response here. Writing in OnAuthenticationFailed causes a
+            // double-fault: the framework's challenge handler also tries to
+            // write a 401 after the policy fails, and the second write throws
+            // "StatusCode cannot be set because the response has already
+            // started." We stash the reason in HttpContext.Items and let
+            // OnChallenge emit the body once the framework decides to write
+            // the challenge.
             OnAuthenticationFailed = ctx =>
             {
                 if (ctx.Exception is SecurityTokenExpiredException)
                 {
-                    ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                    ctx.Response.ContentType = "application/json";
-                    return ctx.Response.WriteAsync(
-                        "{\"error\":\"token_expired\",\"message\":\"Access token expired. Please refresh.\"}");
+                    ctx.HttpContext.Items["jwt_error"] = "token_expired";
                 }
                 return Task.CompletedTask;
+            },
+            OnChallenge = async ctx =>
+            {
+                // Only customize the body when the reason is token expiration.
+                // For other 401 reasons (missing/invalid token, policy failure
+                // for an authenticated user, etc.) let the framework write its
+                // default challenge body.
+                if (ctx.HttpContext.Items["jwt_error"] is string reason
+                    && string.Equals(reason, "token_expired", StringComparison.Ordinal))
+                {
+                    ctx.HandleResponse(); // suppress default challenge body
+                    ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    ctx.Response.ContentType = "application/json";
+                    await ctx.Response.WriteAsync(
+                        "{\"error\":\"token_expired\",\"message\":\"Access token expired. Please refresh.\"}");
+                }
             }
         };
     });

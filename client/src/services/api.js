@@ -201,9 +201,9 @@ export const api = {
         body: JSON.stringify(configData),
     }),
 
-    excludeItem: (sectionId, itemId, currentTrip, stockMastId, brnchId = null, purSaleIds = []) => request('/orders/exclude', {
+    excludeItem: (sectionId, itemId, currentTrip, stockMastId, brnchId = null, entries = []) => request('/orders/exclude', {
         method: 'POST',
-        body: JSON.stringify({ sectionId, itemId, currentTrip, stockMastId, brnchId, purSaleIds }),
+        body: JSON.stringify({ sectionId, itemId, currentTrip, stockMastId, brnchId, entries }),
     }),
 
     checkPendingOrders: (BrnchId) =>

@@ -26,7 +26,7 @@ public static class DependencyInjection
         services.AddSingleton<IClock, SystemClock>();
 
         // Security
-        services.AddSingleton<IPasswordHasher, BcryptPasswordHasher>();
+        services.AddSingleton<IPasswordHasher, Base64PasswordHasher>();
         services.AddSingleton<JwtTokenService>();
         services.AddSingleton<IJwtTokenService>(sp => sp.GetRequiredService<JwtTokenService>());
         services.AddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();

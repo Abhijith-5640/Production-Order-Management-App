@@ -10,7 +10,7 @@ public sealed record ExcludeItemCommand(
     int CurrentTrip,
     int StockMastId,
     int? BrnchId,
-    IReadOnlyList<int> PurSaleIds);
+    IReadOnlyList<Domain.Entities.DistributionEntry> Entries);
 
 public sealed class ExcludeItemHandler : IHandler<ExcludeItemCommand, string>
 {
@@ -28,17 +28,8 @@ public sealed class ExcludeItemHandler : IHandler<ExcludeItemCommand, string>
         if (request.SectionId <= 0 || request.ItemId <= 0 || request.CurrentTrip <= 0 || request.StockMastId <= 0)
             return Error.InvalidInput("section, itemId, currentTrip, and stockMastId are required for exclusion");
 
-        if (request.PurSaleIds is null || request.PurSaleIds.Count == 0)
-            return Error.InvalidInput("At least one purSaleId is required for exclusion");
-
-        // Single-item guard: for each purSaleId, verify the bill has at least
-        // one other stock_mast_id (i.e. multiple items). If any bill carries
-        // only this stockMastId, block the exclusion.
-        // var singleItemBill = await _orders.FindSingleItemBillAsync(
-        //     request.PurSaleIds, request.StockMastId, cancellationToken);
-
-        // if (singleItemBill is not null)
-        //     return Error.InvalidInput($"Bill {singleItemBill.Value.PurSaleId} contains only this item and cannot be excluded.");
+        if (request.Entries is null || request.Entries.Count == 0)
+            return Error.InvalidInput("At least one exclude entry is required for exclusion");
 
         try
         {
@@ -48,7 +39,7 @@ public sealed class ExcludeItemHandler : IHandler<ExcludeItemCommand, string>
                 request.StockMastId,
                 request.CurrentTrip,
                 request.BrnchId,
-                request.PurSaleIds,
+                request.Entries,
                 cancellationToken);
             return message;
         }
