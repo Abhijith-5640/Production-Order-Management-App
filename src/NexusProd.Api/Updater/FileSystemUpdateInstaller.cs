@@ -66,11 +66,16 @@ public sealed class FileSystemUpdateInstaller : IUpdateInstaller
 
         // Preserve runtime data — copy out, then back over the new files.
         var preservedConfig = Path.Combine(Path.GetTempPath(), "db_config.json");
+        var preservedLocal = Path.Combine(Path.GetTempPath(), "appsettings.local.json");
         var preservedLogs = Path.Combine(Path.GetTempPath(), "logs");
         try
         {
             var cfgSrc = Path.Combine(_installDir, "db_config.json");
             if (File.Exists(cfgSrc)) File.Copy(cfgSrc, preservedConfig, overwrite: true);
+
+            var localSrc = Path.Combine(_installDir, "appsettings.local.json");
+            if (File.Exists(localSrc)) File.Copy(localSrc, preservedLocal, overwrite: true);
+
             var logsSrc = Path.Combine(_installDir, "logs");
             if (Directory.Exists(logsSrc))
             {
@@ -87,6 +92,7 @@ public sealed class FileSystemUpdateInstaller : IUpdateInstaller
             ZipFile.ExtractToDirectory(zipPath, _installDir, overwriteFiles: true);
 
             if (File.Exists(preservedConfig)) File.Copy(preservedConfig, Path.Combine(_installDir, "db_config.json"), overwrite: true);
+            if (File.Exists(preservedLocal)) File.Copy(preservedLocal, Path.Combine(_installDir, "appsettings.local.json"), overwrite: true);
             if (Directory.Exists(preservedLogs))
             {
                 var logsDst = Path.Combine(_installDir, "logs");
@@ -103,6 +109,7 @@ public sealed class FileSystemUpdateInstaller : IUpdateInstaller
         {
             // Best-effort cleanup.
             try { if (File.Exists(preservedConfig)) File.Delete(preservedConfig); } catch { }
+            try { if (File.Exists(preservedLocal)) File.Delete(preservedLocal); } catch { }
             try { if (Directory.Exists(preservedLogs)) Directory.Delete(preservedLogs, recursive: true); } catch { }
             try { File.Delete(zipPath); } catch { }
         }

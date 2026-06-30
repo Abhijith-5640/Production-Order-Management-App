@@ -14,6 +14,13 @@ using NexusProd.Api.Updater;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ← ADD THIS BLOCK HERE
+builder.Configuration
+    .AddJsonFile("appsettings.json", optional: false)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true)
+    .AddJsonFile("appsettings.local.json", optional: true)
+    .AddEnvironmentVariables();
+
 // -----------------------------------------------------------------------------
 // Logging — simple console; file logging can be added via Serilog later.
 // -----------------------------------------------------------------------------
@@ -41,19 +48,40 @@ builder.Services.AddUpdater();
 // AuthN / AuthZ — HS256 JWT bearer.
 // -----------------------------------------------------------------------------
 var jwtSettings = builder.Configuration.GetSection("JwtSettings").Get<JwtSettings>() ?? new JwtSettings();
+
+// Fail fast — secrets must be set in appsettings.local.json or env vars
 if (string.IsNullOrWhiteSpace(jwtSettings.AccessSecret) || string.IsNullOrWhiteSpace(jwtSettings.RefreshSecret))
 {
-    // Use machine-derived dev secrets so the app boots out of the box.
-    // Production deployments MUST override these via env vars.
-    if (string.IsNullOrWhiteSpace(jwtSettings.AccessSecret))
-        jwtSettings.AccessSecret = Convert.ToBase64String(Encoding.UTF8.GetBytes(Environment.MachineName + ":access"));
-    if (string.IsNullOrWhiteSpace(jwtSettings.RefreshSecret))
-        jwtSettings.RefreshSecret = Convert.ToBase64String(Encoding.UTF8.GetBytes(Environment.MachineName + ":refresh"));
+    // First boot — generate and persist secrets automatically
+    var localPath = Path.Combine(
+        builder.Environment.ContentRootPath, "appsettings.local.json");
+
+    jwtSettings.AccessSecret = Convert.ToBase64String(
+        System.Security.Cryptography.RandomNumberGenerator.GetBytes(64));
+    jwtSettings.RefreshSecret = Convert.ToBase64String(
+        System.Security.Cryptography.RandomNumberGenerator.GetBytes(64));
+
+    var generated = new
+    {
+        JwtSettings = new
+        {
+            jwtSettings.AccessSecret,
+            jwtSettings.RefreshSecret
+        }
+    };
+
+    File.WriteAllText(localPath,
+        System.Text.Json.JsonSerializer.Serialize(generated,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+
+    // Re-apply so the running instance uses the new secrets
     builder.Services.PostConfigure<JwtSettings>(opts =>
     {
         opts.AccessSecret = jwtSettings.AccessSecret;
         opts.RefreshSecret = jwtSettings.RefreshSecret;
     });
+
+    Console.WriteLine("First boot — JWT secrets generated and saved to appsettings.local.json");
 }
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
