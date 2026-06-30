@@ -154,7 +154,7 @@ const Dashboard = () => {
         setLoading({ state: true, text: 'Loading Order List...' });
         try {
             const { orders } = await api.getOrders(section.id, trip.id);
-            console.log(orders);
+            console.log(orders !== null ? "Orders Loaded" : "Error Loading Orders");
             // Normalize every distribution once at load time so FE/SE/QR all
             // see the same shape (distribution singular, originalQty snapshot,
             // per-row stockMastId promoted from the parent item).
@@ -684,6 +684,7 @@ const Dashboard = () => {
             <DetailModal
                 isOpen={detailModal.isOpen}
                 activeItem={detailModal.item}
+                currentSection={currentSection}
                 currentTrip={currentTrip}
                 onClose={() => setDetailModal({ isOpen: false, item: null })}
                 onUpdateQty={handleUpdateQty}

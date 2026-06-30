@@ -11,8 +11,9 @@ internal static class OrderMapper
         TotalQty: item.TotalQty ?? 0m,
         Name: item.Name,
         Unit: item.Unit,
+        UnitDecml: item.UnitDecml,
         IsCompleted: item.IsCompleted,
         Distribution: item.Distribution
-            .Select(d => new DistributionDto(d.PurSaleId, d.Branch, d.BrnchId, d.Trip, d.Qty ?? 0m, d.AvailableTrips ?? []))
+            .Select(d => new DistributionDto(d.PurSaleId, d.Branch, d.BrnchId, d.Trip, d.Qty ?? 0m, d.AvailableTrips ?? [], d.BillNoStr))
             .ToList());
 }

@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, CheckCircle, Ban, Plus, Minus } from 'lucide-react';
 
-const DetailModal = ({ isOpen, activeItem, currentTrip, onClose, onUpdateQty, onSave, onExcludeItem }) => {
+const DetailModal = ({ isOpen, activeItem,currentSection, currentTrip, onClose, onUpdateQty, onSave, onExcludeItem }) => {
     if (!isOpen || !activeItem) return null;
 
     const filteredDist = activeItem.distribution || [];
@@ -15,11 +15,18 @@ const DetailModal = ({ isOpen, activeItem, currentTrip, onClose, onUpdateQty, on
 
                 <div className="p-5 border-b border-slate-300 flex justify-between items-center bg-white sticky top-0 z-10">
                     <div>
-
+                       <div className="text-[10px] flex gap-2 tracking-normal uppercase"> 
+                        <p className="font-black bg-fuchsia-50 text-fuchsia-600 px-2 py-0.5 rounded uppercase mb-5 inline-block">
+                            {currentSection.name}
+                        </p>
+                        <p className="font-black bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded mb-5 inline-block">
+                            {currentTrip.trip}
+                        </p>
+                        </div>
                         <h3 className="text-xl font-black text-slate-800 leading-none tracking-tight">
                             {activeItem.name}
                         </h3>
-                        <p className="text-[10px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded uppercase tracking-tighter mb-1 inline-block">
+                        <p className="text-[10px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded uppercase tracking-tighter mt-2 inline-block">
                             {activeItem.unit}
                         </p>
                     </div>
@@ -34,7 +41,10 @@ const DetailModal = ({ isOpen, activeItem, currentTrip, onClose, onUpdateQty, on
                 <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar bg-slate-50">
                     {filteredDist.map((dist, idx) => (
                         <div key={idx} className="bg-white p-4 rounded-2xl border border-slate-100 flex items-center justify-between shadow-sm">
-                            <span className="text-xs font-bold text-slate-500 uppercase flex-1 pr-2">{dist.branch}</span>
+                            <div className="flex flex-col gap-0.5 flex-1 pr-2">
+                                <span className="text-xs font-bold text-slate-500 uppercase">{dist.branch}</span>
+                                <span className="text-xs font-bold text-slate-400 py-.5">Invoice : {dist.billNoStr}</span>
+                            </div>
                             <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-xl  mr-3">
                                 <button
                                     onClick={() => onUpdateQty(idx, -1)}

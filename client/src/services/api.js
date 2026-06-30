@@ -17,8 +17,14 @@
 //  - If refresh itself fails, or the server returns 401 with body `Token revoked`,
 //    we clear local auth and dispatch `nexus:session_expired` so the app can route
 //    the user back to /login.
-const DEV_API_BASE_URL = 'http://localhost:5099/api';
-const API_BASE_URL = import.meta.env.DEV ? DEV_API_BASE_URL : '/api';
+const DEV_API_BASE_URL = 'http://localhost:8443/api';
+
+// Change this to a dynamic getter function
+export const getApiBaseUrl = () => {
+  return import.meta.env.DEV 
+    ? DEV_API_BASE_URL 
+    : (window.API_BASE_URL || '/api');
+};
 
 const TOKEN_KEY     = 'nexus_token';
 const EXPIRES_KEY   = 'nexus_token_expires';
@@ -80,7 +86,7 @@ export let refreshInFlight = null;
 
 export async function refreshAccessToken() {
     // No Authorization header on this call — we are refreshing, not requesting.
-    const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+    const res = await fetch(`${getApiBaseUrl()}/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -119,7 +125,7 @@ async function rawFetch(path, init) {
     const headers = { 'Content-Type': 'application/json', ...(init.headers || {}) };
     const token = authStore.getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
-    return fetch(`${API_BASE_URL}${path}`, {
+    return fetch(`${getApiBaseUrl()}${path}`, {
         ...init,
         headers,
         credentials: 'include',

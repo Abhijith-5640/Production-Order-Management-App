@@ -717,7 +717,9 @@ public sealed class MySqlOrderRepository : IOrderRepository
             u.PurTmpltId,
             t.trip AS TripName,
             t.trip_seq AS TripSequence,
-            u.UnitName
+            u.UnitName,
+            u.BillNoStr,
+            u.UnitDecml
         FROM (
             SELECT 
                 i.itm_mast_id    AS ItemId,
@@ -729,7 +731,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 bs.trip_no       AS Trip,
                 bs.pur_brnch_id AS BrnchId,
                 bs.pur_template_id AS PurTmpltId,
-                un.symbol    AS UnitName
+                un.symbol    AS UnitName,
+                CONCAT_WS(NULLIF(bsm.delim, '-'), 
+                           NULLIF(bsm.bill_prfx, ''), 
+                           CAST(bsm.bill_no AS CHAR)
+                        ) AS BillNoStr,
+                un.no_of_decimal AS UnitDecml
             FROM INV31065BS bs
             JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
             JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
@@ -761,7 +768,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 bs.trip_no       AS Trip,
                 bs.pur_brnch_id AS BrnchId,
                 bs.pur_template_id AS PurTmpltId,
-                un.symbol    AS UnitName
+                un.symbol    AS UnitName,
+                CONCAT_WS(NULLIF(sm.delim, '-'), 
+                           NULLIF(sm.bill_prfx, ''), 
+                           CAST(sm.bill_no AS CHAR)
+                        ) AS BillNoStr,
+                un.no_of_decimal AS UnitDecml
             FROM INV31065BS bs
             JOIN INV31065 sm     ON bs.sales_mast_id = sm.sales_mast_id
             JOIN INV31066 sd     ON sd.sales_mast_id = sm.sales_mast_id
@@ -833,6 +845,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         StockMastId = row.StockMastId,
                         TotalQty = row.TotalQty,
                         Unit = row.UnitName,
+                        UnitDecml = row.UnitDecml,
                         IsCompleted = false,
                         Distribution = new List<DistributionEntry>()
 
@@ -857,7 +870,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     Trip = row.TripId,
                     Qty = Convert.ToDecimal(row.Qty),
                     BrnchId = row.BrnchId,
-                    AvailableTrips = laterTrips
+                    AvailableTrips = laterTrips,
+                    BillNoStr = row.BillNoStr
                 });
                 // if (!ToBool(item.IsCompleted)) item = item with { IsCompleted = false };
                 byItem[row.StockMastId] = item;

@@ -11,6 +11,7 @@ public sealed record OrderItem
     public decimal? TotalQty { get; init; }
     public string Name { get; init; } = string.Empty;
     public string Unit { get; init; } = string.Empty;
+    public int UnitDecml { get; init; }
     public bool IsCompleted { get; init; }
     public List<DistributionEntry> Distribution { get; init; } = new();
 

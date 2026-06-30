@@ -196,6 +196,9 @@ const AdjustmentModal = ({
                                         <h4 className="font-bold text-slate-700 text-sm uppercase tracking-wide">
                                             {p.branch}
                                         </h4>
+                                         <h5 className="font-bold text-slate-400 text-[12px] uppercase tracking-wide">
+                                            Invoice : {p.billNoStr}
+                                        </h5>
                                         <p className="text-xs text-slate-400 font-semibold mt-0.5">
                                             {mode === 'quantity_reduction' ? 'Remaining Balance' : 'Current Quantity'}
                                         </p>

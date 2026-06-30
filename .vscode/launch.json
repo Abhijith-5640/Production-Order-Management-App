@@ -10,7 +10,7 @@
       "cwd": "${workspaceFolder}/src/NexusProd.Api/bin/Debug/net8.0/win-x64",
       "env": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "ASPNETCORE_URLS": "http://127.0.0.1:5099"
+        "ASPNETCORE_URLS": "http://127.0.0.1:8443"
       },
       "console": "integratedTerminal",
       "stopAtEntry": false

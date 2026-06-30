@@ -8,7 +8,8 @@ public sealed record DistributionDto(
     int BrnchId,
     int Trip,
     decimal Qty,
-    IReadOnlyList<Trip> availableTrips);
+    IReadOnlyList<Trip> availableTrips,
+    string BillNoStr);
 
 public sealed record OrderItemDto(
     int Id,
@@ -16,6 +17,7 @@ public sealed record OrderItemDto(
     decimal TotalQty,
     string Name,
     string Unit,
+    int UnitDecml,
     bool IsCompleted,
     IReadOnlyList<DistributionDto> Distribution);
 

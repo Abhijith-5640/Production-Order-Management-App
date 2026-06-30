@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
 // The API default points at the new .NET server. Override with VITE_API_TARGET.
-const DEFAULT_API_TARGET = 'http://127.0.0.1:5099';
+const DEFAULT_API_TARGET = 'http://127.0.0.1:8443';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');

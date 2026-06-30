@@ -16,5 +16,7 @@ internal sealed record FlatRowItemM(
     int PurTmpltId,
     string TripName,
     int TripSequence,
-    string UnitName
+    string UnitName,
+    string BillNoStr,
+    int UnitDecml
 );

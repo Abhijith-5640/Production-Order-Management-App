@@ -13,5 +13,6 @@ public sealed class DistributionEntry
     public int StockMastId { get; init; }
     public decimal OriginalQty { get; init; }
     public int? TargetTrip { get; init; }
+    public string BillNoStr { get; init; } = string.Empty;
     public List<Trip> AvailableTrips { get; init; } = new();
 }
