@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { Factory, LogOut, Layers, Truck, ChevronDown, Check, PackageSearch, Ban, ClipboardList, AlertTriangle } from 'lucide-react';
 
-import { api } from '../services/api';
+import { api, authStore } from '../services/api';
 import FullScreenLoader from '../components/FullScreenLoader';
 import PickerModal from '../components/PickerModal';
 import DetailModal from '../components/DetailModal';
@@ -111,12 +111,7 @@ const Dashboard = () => {
             // is not stuck on the dashboard with a stale token.
             console.warn('Logout request failed; clearing local session anyway.', error);
         }
-        localStorage.removeItem('nexus_token');
-        localStorage.removeItem('nexus_token_expires');
-        localStorage.removeItem('nexus_authenticated');
-        localStorage.removeItem('nexus_user');
-        localStorage.removeItem('nexus_user_id');
-        localStorage.removeItem('nexus_user_brnch_id');
+        authStore.clearSession();
         navigate('/login');
     };
 
@@ -625,10 +620,10 @@ const Dashboard = () => {
                             {orderData.map((item) => {
                                 const isDone = item.isCompleted;
                                 const tripTotal = item.totalQty;
-
                                 return (
                                     <div
-                                        key={item.itemId}
+
+                                        key={item.id}
                                         onClick={() => handleOpenDetail(item)}
                                         className={`p-4 rounded-xl transition-all duration-300 flex items-center justify-between cursor-pointer touch-active ${isDone ? "bg-emerald-50 border-emerald-100 opacity-80" : "bg-white border-slate-100 shadow-sm hover:border-indigo-200"}`}>
 

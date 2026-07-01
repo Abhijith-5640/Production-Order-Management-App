@@ -1,11 +1,12 @@
 import React from 'react';
 import { X, CheckCircle, Ban, Plus, Minus } from 'lucide-react';
+import QtyInput from './QtyInputModal';
 
 const DetailModal = ({ isOpen, activeItem,currentSection, currentTrip, onClose, onUpdateQty, onSave, onExcludeItem }) => {
     if (!isOpen || !activeItem) return null;
 
     const filteredDist = activeItem.distribution || [];
-    const grandTotal = filteredDist.reduce((sum, dist) => sum + dist.qty, 0);
+    const grandTotal = filteredDist.reduce((sum, dist) => sum + (dist.qty || 0), 0);
     
 
     return (
@@ -41,8 +42,8 @@ const DetailModal = ({ isOpen, activeItem,currentSection, currentTrip, onClose, 
                 <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar bg-slate-50">
                     {filteredDist.map((dist, idx) => (
                         <div key={idx} className="bg-white p-4 rounded-2xl border border-slate-100 flex items-center justify-between shadow-sm">
-                            <div className="flex flex-col gap-0.5 flex-1 pr-2">
-                                <span className="text-xs font-bold text-slate-500 uppercase">{dist.branch}</span>
+                            <div className="flex flex-col gap-0.5 flex-1 pr-2 min-w-0">
+                                <span className="text-xs font-bold text-slate-500 uppercase break-words">{dist.branch}</span>
                                 <span className="text-xs font-bold text-slate-400 py-.5">Invoice : {dist.billNoStr}</span>
                             </div>
                             <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-xl  mr-3">
@@ -52,7 +53,9 @@ const DetailModal = ({ isOpen, activeItem,currentSection, currentTrip, onClose, 
                                 >
                                     <Minus className="w-4 h-4" />
                                 </button>
-                                <span className="w-8 text-center font-bold text-slate-800 text-lg">{dist.qty}</span>
+                                {/* <span className="w-8 text-center font-bold text-slate-800 text-lg">{dist.qty}</span> */}
+                                <QtyInput dist={dist} unitDecml={dist.unitDecml} onQtyChange={(dist, newQty) => onUpdateQty(idx, newQty - dist.qty)} />
+                                
                                 <button
                                     onClick={() => onUpdateQty(idx, 1)}
                                     className="w-10 h-10 rounded-lg bg-white shadow-sm flex items-center justify-center text-emerald-600 font-bold active:bg-slate-100 transition-all border-none"

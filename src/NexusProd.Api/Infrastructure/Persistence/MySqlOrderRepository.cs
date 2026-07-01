@@ -814,23 +814,49 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 .Distinct()
                 .ToList();
 
+            // Batch all branch-pair trip lookups into a single query instead of
+            // firing one query per unique (PurTmpltId, BrnchId) pair (N+1 fix).
+            var allTripsLookup = new Dictionary<(int PurTmpltId, int PurBrnchId), List<Trip>>();
+            if (branchPairKeys.Count > 0)
+            {
+                var allTrips = (await conn.QueryAsync<TripBranchRow>(new CommandDefinition(
+                    @"SELECT DISTINCT t.id        AS Id,
+                                      t.trip      AS Name,
+                                      t.trip_seq  AS TripSeq,
+                                      bs.pur_template_id AS PurTmpltId,
+                                      bs.pur_brnch_id    AS PurBrnchId
+                      FROM   Trip t
+                      JOIN   inv31065bs bs ON bs.trip_no = t.id
+                      WHERE  bs.pur_template_id IN @purTmpltIds
+                        AND  bs.pur_brnch_id    IN @purBrnchIds
+                        AND  IFNULL(bs.is_finalized, 0) = 0
+                        AND  CAST(bs.createdDt AS DATE) = CAST(NOW() AS DATE)
+                      ORDER  BY t.trip_seq ASC",
+                    new
+                    {
+                        purTmpltIds = branchPairKeys.Select(k => k.PurTmpltId).Distinct().ToList(),
+                        purBrnchIds = branchPairKeys.Select(k => k.BrnchId).Distinct().ToList(),
+                    },
+                    cancellationToken: cancellationToken))).ToList();
+
+                foreach (var t in allTrips)
+                {
+                    if (!t.PurTmpltId.HasValue || !t.PurBrnchId.HasValue) continue;
+                    var key = (t.PurTmpltId.Value, t.PurBrnchId.Value);
+                    if (!allTripsLookup.TryGetValue(key, out var list))
+                    {
+                        list = new List<Trip>();
+                        allTripsLookup[key] = list;
+                    }
+                    list.Add(new Trip { Id = t.Id, Name = t.Name, TripSeq = t.TripSeq });
+                }
+            }
+
             var tripsByTemplate = new Dictionary<int, List<Trip>>();
             foreach (var key in branchPairKeys)
             {
-                var trips = await conn.QueryAsync<Trip>(new CommandDefinition(
-                    @"SELECT DISTINCT t.id        AS Id,
-                                      t.trip      AS Name,
-                                      t.trip_seq  AS TripSeq
-                      FROM   Trip t
-                      JOIN   inv31065bs bs ON bs.trip_no = t.id
-                      WHERE  bs.pur_template_id = @purTmpltId
-                        AND  bs.pur_brnch_id    = @purBrnchId
-                        AND  IFNULL(bs.is_finalized, 0) = 0
-                        AND  CAST(bs.createdDt AS DATE) = CAST(NOW() AS DATE)
-                      ORDER BY t.trip_seq ASC",
-                    new { purTmpltId = key.PurTmpltId, purBrnchId = key.BrnchId },
-                    cancellationToken: cancellationToken));
-                tripsByTemplate[key.PurTmpltId] = trips.ToList();
+                allTripsLookup.TryGetValue((key.PurTmpltId, key.BrnchId), out var trips);
+                tripsByTemplate[key.PurTmpltId] = trips ?? new List<Trip>();
             }
 
             var byItem = new Dictionary<int, OrderItem>();
@@ -1681,5 +1707,16 @@ public sealed class MySqlOrderRepository : IOrderRepository
         public string VehicleNo { get; set; } = string.Empty;
         public string DriverName { get; set; } = string.Empty;
 
+    }
+
+    // DTO for the batched trips lookup in GetOrdersAsync — carries the composite
+    // (PurTmpltId, PurBrnchId) key needed to group results back.
+    private sealed class TripBranchRow
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public int TripSeq { get; set; }
+        public int? PurTmpltId { get; set; }
+        public int? PurBrnchId { get; set; }
     }
 }

@@ -101,4 +101,35 @@ public sealed class JwtTokenService : IJwtTokenService
             return null;
         }
     }
+
+    public TokenPrincipal? ValidateAccessToken(string token)
+    {
+        try
+        {
+            var handler = new JwtSecurityTokenHandler();
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.AccessSecret));
+            handler.ValidateToken(token, new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidIssuer = _settings.Issuer,
+                ValidateAudience = true,
+                ValidAudience = _settings.Audience,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = key,
+                ValidateLifetime = true,
+                ClockSkew = TimeSpan.FromMinutes(1),
+                NameClaimType = ClaimTypes.Name,
+                RoleClaimType = ClaimTypes.Role
+            }, out var validated);
+            var jwt = (JwtSecurityToken)validated;
+            var sub = jwt.Subject;
+            var jti = jwt.Id;
+            if (!int.TryParse(sub, out var userId)) return null;
+            return new TokenPrincipal(userId, jti, jwt.ValidTo);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

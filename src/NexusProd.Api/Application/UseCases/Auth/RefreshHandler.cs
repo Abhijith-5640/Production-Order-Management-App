@@ -6,7 +6,7 @@ using NexusProd.Api.Domain.Entities;
 namespace NexusProd.Api.Application.UseCases.Auth;
 
 public sealed record RefreshCommand(string RefreshToken);
-public sealed record RefreshResult(string AccessToken, DateTimeOffset AccessExpiresAt);
+public sealed record RefreshResult(string AccessToken, DateTimeOffset AccessExpiresAt, string RefreshToken, DateTimeOffset RefreshExpiresAt);
 
 /// <summary>
 /// Validates a presented refresh token, marks the old JTI revoked, and
@@ -87,7 +87,7 @@ public sealed class RefreshHandler : IHandler<RefreshCommand, RefreshResult>
         }
 
         var (newAccess, _, newAccessExp) = _jwt.IssueAccessToken(user.Id, user.UserName, user.UserBrnchId, user.UserCounterId);
-        var (_, newRefreshJti, newRefreshExp) = _jwt.IssueRefreshToken(userId.Value);
+        var (newRefreshToken, newRefreshJti, newRefreshExp) = _jwt.IssueRefreshToken(userId.Value);
         try
         {
             await _refreshTokens.StoreAsync(newRefreshJti, userId.Value, newRefreshExp, cancellationToken);
@@ -98,6 +98,6 @@ public sealed class RefreshHandler : IHandler<RefreshCommand, RefreshResult>
             return Error.DatabaseError(ex.Message);
         }
 
-        return new RefreshResult(newAccess, newAccessExp);
+        return new RefreshResult(newAccess, newAccessExp, newRefreshToken, newRefreshExp);
     }
 }

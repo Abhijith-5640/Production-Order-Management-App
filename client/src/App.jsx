@@ -66,7 +66,10 @@ const PrivateRoute = ({ children }) => {
   }
 
   const expires = authStore.getExpiresAt();
-  const isExpired = expires && Date.now() > expires;
+  // Treat a missing expiry (0) as expired — this covers tokens issued before
+  // the expiry field was added to storage, or corrupted entries. The cold-start
+  // refresh will verify the token's real validity with the server.
+  const isExpired = !expires || Date.now() > expires;
 
   // Token still valid — render immediately.
   if (!isExpired) {

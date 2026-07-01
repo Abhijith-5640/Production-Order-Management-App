@@ -13,6 +13,9 @@ public interface IJwtTokenService
 
     /// <summary>Returns the principal inside <paramref name="token"/>, or null if invalid.</summary>
     TokenPrincipal? ValidateRefreshToken(string token);
+
+    /// <summary>Validates an access token using the same parameters as JwtBearer.</summary>
+    TokenPrincipal? ValidateAccessToken(string token);
 }
 
 public sealed record TokenPrincipal(int UserId, string Jti, DateTimeOffset ExpiresAt);

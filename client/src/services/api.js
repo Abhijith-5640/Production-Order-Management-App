@@ -124,7 +124,16 @@ function getRefreshPromise() {
 async function rawFetch(path, init) {
     const headers = { 'Content-Type': 'application/json', ...(init.headers || {}) };
     const token = authStore.getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
+    if (token) {
+        // Guard: a token that doesn't look like a JWT (must have 2 dots
+        // separating 3 Base64url segments) is corrupt. Don't send it to
+        // the server — just return a synthetic 401 so the caller's
+        // error handler triggers a clean redirect to /login.
+        if (typeof token !== 'string' || (token.match(/\./g) || []).length !== 2) {
+            return new Response(null, { status: 401, statusText: 'Invalid token format' });
+        }
+        headers.Authorization = `Bearer ${token}`;
+    }
     return fetch(`${getApiBaseUrl()}${path}`, {
         ...init,
         headers,
@@ -158,12 +167,14 @@ async function request(path, init = {}, _isRetry = false) {
         }
     }
 
-    // Blacklisted access token (server's JwtBlacklistMiddleware returns this
-    // shape for revoked JTIs). Treat it as a hard logout — the user can't
-    // recover by refreshing, so route them back to /login.
-    if (response.status === 401 && body?.message === 'Token revoked') {
+    // Any other 401 (invalid format, wrong signing key, missing/invalid
+    // token) is a hard logout — the server can't recover with a refresh.
+    if (response.status === 401) {
         authStore.clearSession();
         dispatchSessionExpired();
+        const err = new Error(body?.message || body?.error || 'Unauthorized');
+        err.code = 'SESSION_EXPIRED';
+        throw err;
     }
 
     // Everything else (real auth failure, server error, etc.) surfaces as before.

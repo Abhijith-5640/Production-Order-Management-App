@@ -56,9 +56,7 @@
     <ItemGroup>
       <_SpaFiles Include="wwwroot\**\*.*" />
     </ItemGroup>
-    <Copy SourceFiles="@(_SpaFiles)"
-          DestinationFiles="@(_SpaFiles->'$(OutDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_SpaFiles)" DestinationFiles="@(_SpaFiles->'$(OutDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

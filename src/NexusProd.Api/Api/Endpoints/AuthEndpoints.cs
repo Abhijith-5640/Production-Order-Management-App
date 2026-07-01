@@ -47,7 +47,7 @@ public static class AuthEndpoints
                 await Task.CompletedTask;
                 return Results.Ok(new LoginResponse(login.AccessToken, login.AccessExpiresAt, login.User, login.UserId, login.UserBrnchId, login.UserCounterId));
             });
-        }).AllowAnonymous();
+        }).AllowAnonymous().RequireRateLimiting("login");
 
         group.MapPost("/refresh", async (
             HttpContext ctx,
@@ -58,16 +58,23 @@ public static class AuthEndpoints
             if (!ctx.Request.Cookies.TryGetValue(jwtOptions.Value.CookieName, out var cookieValue) || string.IsNullOrEmpty(cookieValue))
                 return Results.Json(new { success = false, message = "Missing refresh cookie" }, statusCode: StatusCodes.Status401Unauthorized);
 
-            // The cookie now carries the real refresh JWT issued at login.
-            // The handler validates it, rotates the JTI server-side, and
-            // returns a fresh access token. Note: the rotated refresh
-            // token is NOT written back to the cookie here — clients that
-            // need a rotated cookie should log in again. For the silent-
-            // refresh use case (re-issuing an access token) the access
-            // token alone is enough.
             var command = new RefreshCommand(cookieValue);
             var result = await handler.HandleAsync(command, ct);
-            return result.ToHttp(refresh => Results.Ok(new RefreshResponse(refresh.AccessToken, refresh.AccessExpiresAt)));
+            return result.ToHttp(refresh =>
+            {
+                // Write the rotated refresh token back to the HttpOnly cookie.
+                // This implements refresh-token rotation: each /refresh call
+                // invalidates the old JTI server-side and issues a fresh one.
+                ctx.Response.Cookies.Append(jwtOptions.Value.CookieName, refresh.RefreshToken, new CookieOptions
+                {
+                    HttpOnly = true,
+                    Secure = ctx.Request.IsHttps,
+                    SameSite = SameSiteMode.Lax,
+                    Path = "/",
+                    Expires = refresh.RefreshExpiresAt
+                });
+                return Results.Ok(new RefreshResponse(refresh.AccessToken, refresh.AccessExpiresAt));
+            });
         }).AllowAnonymous();
 
         group.MapPost("/logout", async (

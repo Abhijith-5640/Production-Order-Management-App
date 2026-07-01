@@ -22,7 +22,7 @@ public sealed class MySqlConnectionFactory
         if (snapshot.UseMockDb)
             throw new InvalidOperationException("Database is in mock mode — set use_mock_db=false in db_config.json");
 
-        var cs = $"Server={snapshot.Config.Host};Port={snapshot.Config.Port};User ID={snapshot.Config.User};Password={snapshot.Config.Password};Database={snapshot.Config.Database};Pooling=true;Connection Lifetime=300;";
+        var cs = $"Server={snapshot.Config.Host};Port={snapshot.Config.Port};User ID={snapshot.Config.User};Password={snapshot.Config.Password};Database={snapshot.Config.Database};Pooling=true;Max Pool Size=100;Connection Idle Timeout=60;Connection Lifetime=300;";
         var conn = new MySqlConnection(cs);
         await conn.OpenAsync(cancellationToken);
         return conn;
@@ -32,6 +32,6 @@ public sealed class MySqlConnectionFactory
     {
         var snapshot = await _store.ReadAsync(cancellationToken)
             ?? throw new InvalidOperationException("db_config.json missing");
-        return $"Server={snapshot.Config.Host};Port={snapshot.Config.Port};User ID={snapshot.Config.User};Password={snapshot.Config.Password};Database={snapshot.Config.Database};Pooling=true;Connection Lifetime=300;";
+        return $"Server={snapshot.Config.Host};Port={snapshot.Config.Port};User ID={snapshot.Config.User};Password={snapshot.Config.Password};Database={snapshot.Config.Database};Pooling=true;Max Pool Size=100;Connection Idle Timeout=60;Connection Lifetime=300;";
     }
 }

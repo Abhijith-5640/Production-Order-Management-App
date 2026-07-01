@@ -9,6 +9,8 @@ public sealed class JwtSettings
     public int AccessTokenLifetimeMinutes { get; set; } = 15;
     public int RefreshTokenLifetimeDays { get; set; } = 7;
     public string CookieName { get; set; } = "rt";
+    /// <summary>Seconds a revoked refresh JTI remains valid to absorb concurrent-refresh races.</summary>
+    public int RefreshTokenRotationGraceSeconds { get; set; } = 30;
 }
 
 public sealed class UpdateServerSettings

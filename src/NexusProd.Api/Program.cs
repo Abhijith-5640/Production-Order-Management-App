@@ -1,4 +1,5 @@
 using System.Text;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
@@ -36,6 +37,24 @@ builder.Logging.AddSimpleConsole(opt =>
 // -----------------------------------------------------------------------------
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("JwtSettings"));
 builder.Services.Configure<UpdateServerSettings>(builder.Configuration.GetSection("UpdateServerSettings"));
+
+// -----------------------------------------------------------------------------
+// Rate limiting — fixed window: 5 login attempts per IP per 15-second window.
+// Prevents brute-force attacks on the /api/auth/login endpoint.
+// -----------------------------------------------------------------------------
+builder.Services.AddRateLimiter(opts =>
+{
+    opts.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    opts.AddPolicy("login", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromSeconds(15),
+                QueueLimit = 0
+            }));
+});
 
 // -----------------------------------------------------------------------------
 // Application + Infrastructure + Updater
@@ -161,8 +180,11 @@ builder.Services.AddCors(opts =>
     opts.AddDefaultPolicy(p =>
     {
         p.SetIsOriginAllowed(origin =>
-               origin.StartsWith("http://localhost") || origin.StartsWith("http://127.0.0.1")
-            || origin.StartsWith("https://localhost") || origin.StartsWith("https://127.0.0.1"))
+               origin == "http://localhost" || origin == "http://localhost:5099"
+            || origin == "http://localhost:8443" || origin == "https://localhost"
+            || origin == "http://127.0.0.1" || origin == "http://127.0.0.1:5099"
+            || origin == "http://127.0.0.1:8443"
+            || origin == "http://127.0.0.1:5173" || origin == "http://localhost:5173")
          .AllowAnyHeader()
          .AllowAnyMethod()
          .AllowCredentials();
