@@ -750,7 +750,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
             t.trip_seq AS TripSequence,
             u.UnitName,
             u.BillNoStr,
-            u.UnitDecml
+            u.UnitDecml,
+            u.IsPosCompleted 
         FROM (
             SELECT 
                 i.itm_mast_id    AS ItemId,
@@ -763,11 +764,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 bs.pur_brnch_id AS BrnchId,
                 bs.pur_template_id AS PurTmpltId,
                 un.symbol    AS UnitName,
-                CONCAT_WS(NULLIF(bsm.delim, '-'), 
-                           NULLIF(bsm.bill_prfx, ''), 
+                CONCAT_WS(NULLIF(bsm.delim, '-'),
+                           NULLIF(bsm.bill_prfx, ''),
                            CAST(bsm.bill_no AS CHAR)
                         ) AS BillNoStr,
-                un.no_of_decimal AS UnitDecml
+                un.no_of_decimal AS UnitDecml,
+                CASE WHEN pos.stock_mast_id IS NOT NULL THEN 'true' ELSE 'false' END AS IsPosCompleted
             FROM INV31065BS bs
             JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
             JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
@@ -777,11 +779,13 @@ public sealed class MySqlOrderRepository : IOrderRepository
             JOIN CTGE1165pur b   ON bs.pur_brnch_id = b.brnch_id
             JOIN INV21013 pc     ON pc.itm_mast_id = i.itm_mast_id
                                 AND pc.prdt_cat_id = (
-                                                        SELECT CAST(val_data AS SIGNED) 
-                                                        FROM INV21040 
-                                                        WHERE key_data = 'SECTION_CATEGORY_ID' 
+                                                        SELECT CAST(val_data AS SIGNED)
+                                                        FROM INV21040
+                                                        WHERE key_data = 'SECTION_CATEGORY_ID'
                                                         LIMIT 1
                                                     )
+            LEFT  JOIN INV31065BSPOSHis pos ON pos.stock_mast_id = s.stock_mast_id
+                                            AND pos.trip_no = bs.trip_no
             WHERE CAST(bsm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 1
               AND bs.trip_no         = @tripId
@@ -789,7 +793,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
             UNION ALL
 
-            SELECT 
+            SELECT
                 i.itm_mast_id    AS ItemId,
                 i.itm_mast_name  AS `Name`,
                 s.stock_mast_id  AS StockMastId,
@@ -800,11 +804,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 bs.pur_brnch_id AS BrnchId,
                 bs.pur_template_id AS PurTmpltId,
                 un.symbol    AS UnitName,
-                CONCAT_WS(NULLIF(sm.delim, '-'), 
-                           NULLIF(sm.bill_prfx, ''), 
+                CONCAT_WS(NULLIF(sm.delim, '-'),
+                           NULLIF(sm.bill_prfx, ''),
                            CAST(sm.bill_no AS CHAR)
                         ) AS BillNoStr,
-                un.no_of_decimal AS UnitDecml
+                un.no_of_decimal AS UnitDecml,
+                CASE WHEN pos2.stock_mast_id IS NOT NULL THEN 'true' ELSE 'false' END AS IsPosCompleted
             FROM INV31065BS bs
             JOIN INV31065 sm     ON bs.sales_mast_id = sm.sales_mast_id
             JOIN INV31066 sd     ON sd.sales_mast_id = sm.sales_mast_id
@@ -814,18 +819,20 @@ public sealed class MySqlOrderRepository : IOrderRepository
             JOIN CTGE1165pur b   ON bs.pur_brnch_id = b.brnch_id
             JOIN INV21013 pc     ON pc.itm_mast_id = i.itm_mast_id
                                 AND pc.prdt_cat_id = (
-                                                        SELECT CAST(val_data AS SIGNED) 
-                                                        FROM INV21040 
-                                                        WHERE key_data = 'SECTION_CATEGORY_ID' 
+                                                        SELECT CAST(val_data AS SIGNED)
+                                                        FROM INV21040
+                                                        WHERE key_data = 'SECTION_CATEGORY_ID'
                                                         LIMIT 1
                                                     )
+            LEFT  JOIN INV31065BSPOSHis pos2 ON pos2.stock_mast_id = s.stock_mast_id
+                                             AND pos2.trip_no = bs.trip_no
             WHERE CAST(sm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 0
               AND bs.trip_no         = @tripId
               AND pc.prdt_cat_val_id = @sectionId
         ) u
         JOIN Trip t ON t.id = u.Trip
-        ORDER BY u.`Name`, u.Branch, u.BillId";
+        ORDER BY u.IsPosCompleted DESC, u.`Name`, u.Branch, u.BillId";
 
 
             await using var conn = await _factory.OpenAsync(cancellationToken);
@@ -903,9 +910,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         TotalQty = row.TotalQty,
                         Unit = row.UnitName,
                         UnitDecml = row.UnitDecml,
-                        IsCompleted = false,
+                        IsCompleted = (row.IsPosCompleted == "true") ? true : false,
                         Distribution = new List<DistributionEntry>()
-
                     };
                     byItem[row.StockMastId] = item;
                 }
@@ -930,7 +936,6 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     AvailableTrips = laterTrips,
                     BillNoStr = row.BillNoStr
                 });
-                // if (!ToBool(item.IsCompleted)) item = item with { IsCompleted = false };
                 byItem[row.StockMastId] = item;
             }
 
@@ -943,7 +948,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
         }
     }
 
-    public async Task<string> UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken)
+    public async Task<string> UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, int usrId, CancellationToken cancellationToken)
     {
         int updated = 0, skipped = 0, carriedForward = 0, carrySkipped = 0;
         var mastersToRollup = new HashSet<(long SalesMastId, bool IsTransfer)>();
@@ -1074,6 +1079,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     transaction: tx, cancellationToken: cancellationToken));
 
                 updated++;
+
+                // (E.0) Trip-history audit — record this update in INV31065BSPOSHis
+                // inside the same transaction. READY means the item is confirmed
+                // for its current trip; no target trip on a simple update.
+                await UpsertItemTripStatusAsync(conn, tx, d.StockMastId, tripId, usrId,
+                    status: "READY", operationType: "UPDATE", d.PurSaleId, null, cancellationToken);
 
                 // (E.1) CARRY-FORWARD BRANCH — when the user has reduced qty AND
                 // chosen a target trip, route the diff (originalQty - newQty) to
@@ -1284,6 +1295,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
         int currentTripId,
         int? brnchId,
         IReadOnlyList<DistributionEntry> entries,
+        int usrId,
         CancellationToken cancellationToken)
     {
         if (entries is null || entries.Count == 0)
@@ -1392,6 +1404,10 @@ public sealed class MySqlOrderRepository : IOrderRepository
                              AND stock_mast_id = @stockMastId",
                         new { masterId, d.StockMastId },
                         transaction: tx, cancellationToken: cancellationToken));
+
+                    // (E.0) Trip-history audit — full exclude
+                    await UpsertItemTripStatusAsync(conn, tx, d.StockMastId, currentTripId, usrId,
+                        status: "EXCLUDED", operationType: "EXCLUDE", d.PurSaleId, null, cancellationToken);
                 }
                 else
                 {
@@ -1444,6 +1460,10 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 }
 
                 updated++;
+
+                // (E.0) Trip-history audit — partial exclude treated as UPDATE
+                await UpsertItemTripStatusAsync(conn, tx, d.StockMastId, currentTripId, usrId,
+                    status: "READY", operationType: "EXCLUDE", d.PurSaleId, null, cancellationToken);
 
                 // (E.1) CARRY-FORWARD — when the user has chosen a target trip,
                 // route the OriginalQty (the full qty being excluded) to that
@@ -1607,6 +1627,11 @@ public sealed class MySqlOrderRepository : IOrderRepository
                             transaction: tx, cancellationToken: cancellationToken));
                     }
 
+                    // (E.0.b) Trip-history audit — carry-forward
+                    await UpsertItemTripStatusAsync(conn, tx, d.StockMastId, currentTripId, usrId,
+                        status: "CARRIED_FORWARD", operationType: "EXCLUDE",
+                        d.PurSaleId, d.TargetTrip!.Value, cancellationToken);
+
                     carriedForward++;
                 }
             }
@@ -1640,6 +1665,52 @@ public sealed class MySqlOrderRepository : IOrderRepository
             await tx.RollbackAsync(cancellationToken);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Private helper — UPSERT into INV31065BSPOSHis. Runs inside the
+    /// caller's existing transaction. Uses INSERT ... ON DUPLICATE KEY UPDATE
+    /// so the caller never has to check for existence first.
+    /// </summary>
+    private async Task UpsertItemTripStatusAsync(
+        MySqlConnection conn,
+        MySqlTransaction tx,
+        int stockMastId,
+        int tripNo,
+        int usrId,
+        string status,
+        string operationType,
+        int? purSaleId,
+        int? targetTripNo,
+        CancellationToken cancellationToken)
+    {
+        const string sql = @"
+            INSERT INTO INV31065BSPOSHis
+                (stock_mast_id, trip_no, usr_id, status, operation_type, pur_sale_id, target_trip_no)
+            VALUES
+                (@stockMastId, @tripNo, @usrId, @status, @operationType, @purSaleId, @targetTripNo)
+            ON DUPLICATE KEY UPDATE
+                status          = VALUES(status),
+                operation_type  = VALUES(operation_type),
+                pur_sale_id     = VALUES(pur_sale_id),
+                target_trip_no  = VALUES(target_trip_no),
+                usr_id          = VALUES(usr_id),
+                updated_dt      = CURRENT_TIMESTAMP;";
+
+        await conn.ExecuteAsync(new CommandDefinition(
+            sql,
+            new
+            {
+                stockMastId,
+                tripNo,
+                usrId,
+                status,
+                operationType,
+                purSaleId,
+                targetTripNo
+            },
+            transaction: tx,
+            cancellationToken: cancellationToken));
     }
 
     private static bool ToBool(object? val) => val switch

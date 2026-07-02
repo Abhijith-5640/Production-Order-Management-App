@@ -31,7 +31,8 @@ public sealed record GenerateInvoicesResponse(bool Success, string Message, int 
 public sealed record UpdateOrderRequest(
     int ItemId,
     int Trip,
-    IReadOnlyList<UpdateOrderDistributionDto> Distribution);
+    IReadOnlyList<UpdateOrderDistributionDto> Distribution,
+    int UsrId);
 
 public sealed record UpdateOrderDistributionDto(
     int PurSaleId,
@@ -54,6 +55,7 @@ public sealed record ExcludeRequest(
     int CurrentTrip,
     int StockMastId,
     int? BrnchId,
-    IReadOnlyList<ExcludeEntry> Entries);
+    IReadOnlyList<ExcludeEntry> Entries,
+    int UsrId);
 
 public sealed record ExcludeResponse(bool Success, string Message);

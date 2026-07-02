@@ -220,7 +220,8 @@ const Dashboard = () => {
                 branch: d.branch,
                 qty: d.qty,
             }));
-            const result = await api.updateInvoice(item.id, tripId, distribution);
+            const UsrId = localStorage.getItem('nexus_user_id');
+            const result = await api.updateInvoice(item.id, tripId, distribution, UsrId);
             if (result.success) {
                 toast.success(`Invoices updated for ${currentTrip.trip || currentTrip.name || ''}`);
                 setDetailModal({ isOpen: false, item: null });
@@ -272,7 +273,7 @@ const Dashboard = () => {
                 ? (updates[0]?.branch ? (detailModal.item?.distribution?.find(d => d.purSaleId === updates[0].purSaleId)?.brnchId ?? null) : null)
                 : null;
             const item = detailModal.isOpen ? detailModal.item : adjustmentModal.item;
-            await handleExcludeItem(item.id, null, brnchId, entries);
+            await handleExcludeItem(item.id, null, brnchId, entries, localStorage.getItem('nexus_user_id'));
             return;
         }
 
@@ -303,9 +304,10 @@ const Dashboard = () => {
                     ? { targetTrip: targetTripByPurSale[d.purSaleId] }
                     : {}),
             }));
+            const UsrId = localStorage.getItem('nexus_user_id');
             setLoading({ state: true, text: 'Updating Trip Invoice...' });
             try {
-                const result = await api.updateInvoice(item.id, tripId, distribution);
+                const result = await api.updateInvoice(item.id, tripId, distribution, UsrId);
                 if (result.success) {
                     toast.success(`Invoices updated for ${currentTrip.trip || currentTrip.name || ''}`);
                     setDetailModal({ isOpen: false, item: null });
@@ -369,14 +371,15 @@ const Dashboard = () => {
                 setLoading({ state: false, text: '' });
                 return;
             }
-
+            const UsrId = localStorage.getItem('nexus_user_id');
             const result = await api.excludeItem(
                 currentSection.id,
                 itemId,
                 currentTrip.id,
                 stockMastId,
                 brnchId,
-                entries
+                entries,
+                UsrId
             );
             if (result.success) {
                 toast.success(result.message);

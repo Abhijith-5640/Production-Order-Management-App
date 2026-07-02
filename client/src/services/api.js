@@ -221,9 +221,9 @@ export const api = {
     getOrders: (sectionId, trip) =>
         request(`/orders?section=${encodeURIComponent(sectionId)}&trip=${encodeURIComponent(trip)}`),
 
-    updateInvoice: (itemId, trip, distribution) => request('/orders/update', {
+    updateInvoice: (itemId, trip, distribution, usrId) => request('/orders/update', {
         method: 'POST',
-        body: JSON.stringify({ itemId, trip, distribution }),
+        body: JSON.stringify({ itemId, trip, distribution, usrId }),
     }),
 
     saveConfig: (configData) => request('/config/save', {
@@ -236,9 +236,9 @@ export const api = {
         body: JSON.stringify(configData),
     }),
 
-    excludeItem: (sectionId, itemId, currentTrip, stockMastId, brnchId = null, entries = []) => request('/orders/exclude', {
+    excludeItem: (sectionId, itemId, currentTrip, stockMastId, brnchId = null, entries = [], usrId) => request('/orders/exclude', {
         method: 'POST',
-        body: JSON.stringify({ sectionId, itemId, currentTrip, stockMastId, brnchId, entries }),
+        body: JSON.stringify({ sectionId, itemId, currentTrip, stockMastId, brnchId, entries, usrId }),
     }),
 
     checkPendingOrders: (BrnchId) =>

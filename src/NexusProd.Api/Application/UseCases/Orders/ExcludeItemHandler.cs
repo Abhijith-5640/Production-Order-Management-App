@@ -10,7 +10,8 @@ public sealed record ExcludeItemCommand(
     int CurrentTrip,
     int StockMastId,
     int? BrnchId,
-    IReadOnlyList<Domain.Entities.DistributionEntry> Entries);
+    IReadOnlyList<Domain.Entities.DistributionEntry> Entries,
+    int UsrId);
 
 public sealed class ExcludeItemHandler : IHandler<ExcludeItemCommand, string>
 {
@@ -25,8 +26,8 @@ public sealed class ExcludeItemHandler : IHandler<ExcludeItemCommand, string>
 
     public async Task<Result<string>> HandleAsync(ExcludeItemCommand request, CancellationToken cancellationToken)
     {
-        if (request.SectionId <= 0 || request.ItemId <= 0 || request.CurrentTrip <= 0 || request.StockMastId <= 0)
-            return Error.InvalidInput("section, itemId, currentTrip, and stockMastId are required for exclusion");
+        if (request.SectionId <= 0 || request.ItemId <= 0 || request.CurrentTrip <= 0 || request.StockMastId <= 0 || request.UsrId <= 0)
+            return Error.InvalidInput("section, itemId, currentTrip, stockMastId, and usrId are required for exclusion");
 
         if (request.Entries is null || request.Entries.Count == 0)
             return Error.InvalidInput("At least one exclude entry is required for exclusion");
@@ -40,6 +41,7 @@ public sealed class ExcludeItemHandler : IHandler<ExcludeItemCommand, string>
                 request.CurrentTrip,
                 request.BrnchId,
                 request.Entries,
+                request.UsrId,
                 cancellationToken);
             return message;
         }

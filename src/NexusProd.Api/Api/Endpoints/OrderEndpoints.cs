@@ -1,3 +1,4 @@
+using System.IdentityModel.Tokens.Jwt;
 using NexusProd.Api.Api.Contracts;
 using NexusProd.Api.Api.Mappers;
 using NexusProd.Api.Application.Common;
@@ -29,8 +30,9 @@ public static class OrderEndpoints
             return r.ToHttp(o => Results.Ok(new OrdersResponse(o.Orders.Select(OrderMapper.ToDto).ToList())));
         });
 
-        group.MapPost("/update", async (UpdateOrderRequest req, IHandler<UpdateInvoiceCommand, string> h, CancellationToken ct) =>
+        group.MapPost("/update", async (UpdateOrderRequest req, IHandler<UpdateInvoiceCommand, string> h, HttpContext ctx, CancellationToken ct) =>
         {
+            var usrId = req.UsrId;
             var dist = req.Distribution
                 .Select(d => new Domain.Entities.DistributionEntry
                 {
@@ -43,12 +45,13 @@ public static class OrderEndpoints
                     TargetTrip = d.TargetTrip,
                 })
                 .ToList();
-            var r = await h.HandleAsync(new UpdateInvoiceCommand(req.ItemId, req.Trip, dist), ct);
+            var r = await h.HandleAsync(new UpdateInvoiceCommand(req.ItemId, req.Trip, dist, usrId), ct);
             return r.ToHttp(msg => Results.Ok(new UpdateOrderResponse(true, msg)));
         });
 
-        group.MapPost("/exclude", async (ExcludeRequest req, IHandler<ExcludeItemCommand, string> h, CancellationToken ct) =>
+        group.MapPost("/exclude", async (ExcludeRequest req, IHandler<ExcludeItemCommand, string> h, HttpContext ctx, CancellationToken ct) =>
         {
+            var usrId = req.UsrId;
             // Map each per-row ExcludeEntry into the domain DistributionEntry. The
             // server-side ExcludeItemAsync mirrors UpdateInvoiceAsync — it uses
             // d.Qty and d.OriginalQty to decide between DELETE and UPDATE on the
@@ -80,7 +83,8 @@ public static class OrderEndpoints
                 req.CurrentTrip,
                 req.StockMastId,
                 req.BrnchId,
-                dist), ct);
+                dist,
+                usrId), ct);
             return r.ToHttp(msg => Results.Ok(new ExcludeResponse(true, msg)));
         });
     }

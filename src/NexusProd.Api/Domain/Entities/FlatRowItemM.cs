@@ -18,5 +18,6 @@ internal sealed record FlatRowItemM(
     int TripSequence,
     string UnitName,
     string BillNoStr,
-    int UnitDecml
+    int UnitDecml,
+    string IsPosCompleted //Mysql Bool Conversion
 );

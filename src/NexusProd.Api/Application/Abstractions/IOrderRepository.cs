@@ -60,7 +60,7 @@ public interface IOrderRepository
     /// <c>Qty == OriginalQty</c> are skipped (no-op diff). Transactional.
     /// Returns a human-readable summary "{updated} updated, {skipped} skipped".
     /// </summary>
-    Task<string> UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, CancellationToken cancellationToken);
+    Task<string> UpdateInvoiceAsync(int itemId, int tripId, IReadOnlyList<DistributionEntry> newDistribution, int usrId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Per-row exclude / rollover. For each <see cref="DistributionEntry"/>:
@@ -82,5 +82,6 @@ public interface IOrderRepository
         int currentTripId,
         int? brnchId,
         IReadOnlyList<DistributionEntry> entries,
+        int usrId,
         CancellationToken cancellationToken);
 }

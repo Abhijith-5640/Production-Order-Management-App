@@ -5,7 +5,7 @@ using NexusProd.Api.Domain.Entities;
 
 namespace NexusProd.Api.Application.UseCases.Orders;
 
-public sealed record UpdateInvoiceCommand(int ItemId, int Trip, IReadOnlyList<DistributionEntry> NewDistribution);
+public sealed record UpdateInvoiceCommand(int ItemId, int Trip, IReadOnlyList<DistributionEntry> NewDistribution, int UsrId);
 
 public sealed class UpdateInvoiceHandler : IHandler<UpdateInvoiceCommand, string>
 {
@@ -22,6 +22,7 @@ public sealed class UpdateInvoiceHandler : IHandler<UpdateInvoiceCommand, string
     {
         if (request.ItemId <= 0) return Error.InvalidInput("itemId is required");
         if (request.Trip <= 0) return Error.InvalidInput("trip is required");
+        if (request.UsrId <= 0) return Error.InvalidInput("usrId is required");
         if (request.NewDistribution is null) return Error.InvalidInput("newDistribution is required");
         if (request.NewDistribution.Count == 0) return Error.InvalidInput("newDistribution is empty");
         if (request.NewDistribution.Any(d => d.PurSaleId <= 0)) return Error.InvalidInput("All rows must have a valid purSaleId");
@@ -31,7 +32,7 @@ public sealed class UpdateInvoiceHandler : IHandler<UpdateInvoiceCommand, string
 
         try
         {
-            var repoMessage = await _orders.UpdateInvoiceAsync(request.ItemId, request.Trip, request.NewDistribution, cancellationToken);
+            var repoMessage = await _orders.UpdateInvoiceAsync(request.ItemId, request.Trip, request.NewDistribution, request.UsrId, cancellationToken);
             return $"Invoice updated in MySQL for item {request.ItemId} — {repoMessage}";
         }
         catch (Exception ex)

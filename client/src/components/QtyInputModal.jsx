@@ -50,10 +50,12 @@ function QtyInput({ dist, unitDecml, onQtyChange }) {
       type="text"
       inputMode="decimal"
       value={localValue}
-      onFocus={() => setIsFocused(true)}
+      onFocus={(e) => { 
+        setIsFocused(true);
+        e.target.select();
+      }}
       onChange={handleChange}
       onBlur={handleBlur}
-      onFocus={(e) => e.target.select()} // select all text on focus for easier editing
       className="w-15 text-center font-bold text-slate-800 text-lg bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-slate-400 rounded"
     />
   );
