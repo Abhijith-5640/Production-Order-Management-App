@@ -15,7 +15,7 @@ public interface IUserRepository
     /// password and the bcrypt hash (if any) so the application layer can
     /// decide how to verify credentials and migrate the hash on success.
     /// </summary>
-    Task<User?> FindByUsernameAsync(string username, CancellationToken cancellationToken);
+    Task<User?> FindByUsernameAsync(string username, string password, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the user with the matching <paramref name="userId"/>, or

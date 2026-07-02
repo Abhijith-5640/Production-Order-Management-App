@@ -32,7 +32,7 @@ public sealed class LogoutHandler : IHandler<LogoutCommand, bool>
         {
             try
             {
-                await _refreshTokens.RevokeAsync(request.RefreshJti, cancellationToken);
+                await _refreshTokens.RevokeAsync(request.RefreshJti, isSuperseded: false, cancellationToken);
             }
             catch (Exception ex)
             {

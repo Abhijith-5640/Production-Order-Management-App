@@ -11,6 +11,7 @@ public enum ErrorCode
     Unauthorized,
     Forbidden,
     Conflict,
+    TokenAlreadyRotated,
     DatabaseError,
     ConfigurationError
 }
@@ -24,6 +25,7 @@ public sealed record Error(ErrorCode Code, string Message)
     public static Error Unauthorized(string message) => new(ErrorCode.Unauthorized, message);
     public static Error Forbidden(string message) => new(ErrorCode.Forbidden, message);
     public static Error Conflict(string message) => new(ErrorCode.Conflict, message);
+    public static Error TokenAlreadyRotated(string message) => new(ErrorCode.TokenAlreadyRotated, message);
     public static Error DatabaseError(string message) => new(ErrorCode.DatabaseError, message);
     public static Error ConfigurationError(string message) => new(ErrorCode.ConfigurationError, message);
 }

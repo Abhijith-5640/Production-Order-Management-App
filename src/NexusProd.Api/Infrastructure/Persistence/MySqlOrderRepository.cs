@@ -74,6 +74,17 @@ public sealed class MySqlOrderRepository : IOrderRepository
         var v_zeroTaxId = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
             "SELECT tax_id FROM INV21001 WHERE tax_per = 0 LIMIT 1;",
             cancellationToken: cancellationToken)) ?? 0;
+        var v_defTaxId = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
+            "SELECT val_data INTO v_def_tax_id FROM inv21040 WHERE key_data = 'BRANCH_DEFAULT_TAX' LIMIT 1;",
+            cancellationToken: cancellationToken)) ?? 0;
+        var v_defTaxPer = 0m;
+        if (v_defTaxId > 0)
+        {
+            v_defTaxPer = await conn.ExecuteScalarAsync<decimal?>(new CommandDefinition(
+            "SELECT tax_per FROM INV21001 WHERE tax_id = @va_defTaxId LIMIT 1;",
+            new { va_defTaxId = v_defTaxId },
+            cancellationToken: cancellationToken)) ?? 0m;
+        }
         var v_taxKey = await conn.ExecuteScalarAsync<string?>(new CommandDefinition(
             "SELECT tax_key FROM ctge1165 LIMIT 1;",
             cancellationToken: cancellationToken)) ?? string.Empty;
@@ -350,8 +361,14 @@ public sealed class MySqlOrderRepository : IOrderRepository
                              CASE WHEN IFNULL(o.edit_qty, 0) > 0 THEN o.edit_qty
                                   ELSE o.qty END        AS Qty,
                              r.sale_rate       AS SalesRate,
-                             t.tax_id          AS TaxId,
-                             IFNULL(t.tax_per, 0)     AS TaxPer,
+                             CASE 
+                                  WHEN @defTaxId > 0 THEN @defTaxId
+                                  ELSE t.tax_id 
+                             END AS TaxId,
+                             CASE 
+                                  WHEN @defTaxId > 0 THEN @defTaxPer
+                                  ELSE IFNULL(t.tax_per, 0) 
+                             END AS TaxPer,
                              0                 AS TaxAmt,
                              tc.tax_id         AS CessId,
                              IFNULL(tc.tax_per, 0)    AS CessPer,
@@ -390,6 +407,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         brnchId = g.BrnchId,
                         tripNo = g.TripNo,
                         curentDate = v_curDate,
+                        defTaxPer = v_defTaxPer,
+                        defTaxId = v_defTaxId,
                     },
                     transaction: tx, cancellationToken: cancellationToken))).ToList();
 
@@ -484,18 +503,19 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         JOIN   inv21050 s  ON s.stock_mast_id = d.stock_mast_id
                         JOIN   inv21010 i  ON i.itm_mast_id   = s.itm_mast_id
                         JOIN   inv21001 t  ON t.tax_id        = i.tax_id
-                        LEFT  JOIN inv21001 ct ON ct.tax_id    = i.cess_tax_id
+                        LEFT JOIN inv21001 ct ON ct.tax_id    = i.cess_tax_id
+                        LEFT JOIN inv21001 dt ON dt.tax_id    = @defTaxId
                         SET    d.tot_amt = ROUND((
                                     CASE WHEN @isExclusive = 1
-                                         THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(t.tax_per,0)/100)
+                                         THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(COLEASCE(dt.tax_per,t.tax_per),0)/100)
                                             + (d.sales_qty*IFNULL(d.sales_rate, 0))
                                          ELSE d.sales_qty*IFNULL(d.sales_rate, 0) END), {CurncyDecml}),
                                d.tax_amt = ROUND((
                                     CASE WHEN @isExclusive = 1
-                                         THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(t.tax_per,0)/100)
+                                         THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(COLEASCE(dt.tax_per,t.tax_per),0)/100)
                                          ELSE (d.grs_amt
                                               - ((d.sales_qty*IFNULL(d.sales_rate, 0))*100)
-                                                 / (100 + IFNULL(t.tax_per, 0) + IFNULL(ct.tax_per, 0))) END), {CurncyDecml}),
+                                                 / (100 + IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0) + IFNULL(ct.tax_per, 0))) END), {CurncyDecml}),
                                d.cess_id  = CASE WHEN @taxKey = 'GST'
                                                   THEN IFNULL(i.cess_tax_id, @zeroTaxId)
                                                   ELSE NULL END,
@@ -506,22 +526,32 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                                   THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(ct.tax_per, 0)/100)
                                                   ELSE NULL END,
                                d.cgst_per = CASE WHEN @taxKey = 'GST'
-                                                  THEN (IFNULL(t.tax_per, 0) / 2)
+                                                  THEN (IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0) / 2)
                                                   ELSE NULL END,
                                d.cgst_amt = CASE WHEN @taxKey = 'GST'
-                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*(IFNULL(t.tax_per, 0)/2)/100)
+                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*(IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0)/2)/100)
                                                   ELSE NULL END,
                                d.sgst_per = CASE WHEN @taxKey = 'GST'
-                                                  THEN (IFNULL(t.tax_per, 0) / 2)
+                                                  THEN (IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0) / 2)
                                                   ELSE NULL END,
                                d.sgst_amt = CASE WHEN @taxKey = 'GST'
-                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*(IFNULL(t.tax_per, 0)/2)/100)
+                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*(IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0)/2)/100)
                                                   ELSE NULL END,
                                d.grs_amt = ROUND((
                                     CASE WHEN @isExclusive = 1
                                          THEN d.sales_qty*IFNULL(d.sales_rate, 0)
                                          ELSE (d.sales_qty*IFNULL(d.sales_rate, 0)*100)
-                                            / (100 + IFNULL(t.tax_per, 0) + IFNULL(ct.tax_per, 0)) END), {CurncyDecml})
+                                            / (100 + IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0) + IFNULL(ct.tax_per, 0)) END), {CurncyDecml}),
+                                d.grs_amt = CASE 
+				                			WHEN @taxKey = 'GST' THEN 
+				                				d.grs_amt + (d.tax_amt - (IFNULL(d.cgst_amt,0) + IFNULL(d.sgst_amt,0)))
+				                			ELSE d.grs_amt
+				                		END,
+				                d.tax_amt = CASE 
+				                			WHEN @taxKey = 'GST' THEN 
+				                				d.tax_amt - (d.tax_amt - (IFNULL(d.cgst_amt,0) + IFNULL(d.sgst_amt,0)))
+				                			ELSE d.tax_amt
+				                		END
                         WHERE  d.sales_mast_id = @sm;",
                     new
                     {
@@ -529,6 +559,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         taxKey = v_taxKey,
                         zeroTaxId = v_zeroTaxId,
                         sm = salesMastId,
+                        defTaxId = v_defTaxId,
                     },
                     transaction: tx, cancellationToken: cancellationToken));
 
@@ -1003,10 +1034,18 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 decimal newCgst = Math.Round(newGrsAmt * (existing.CgstPer / 100m), decimals);
                 decimal newSgst = Math.Round(newGrsAmt * (existing.SgstPer / 100m), decimals);
                 decimal newCess = Math.Round(newGrsAmt * (existing.CessPer / 100m), decimals);
-                decimal newTax = existing.TaxPer.HasValue
-                    ? Math.Round(newGrsAmt * (existing.TaxPer.Value / 100m), decimals)
-                    : newCgst + newSgst + newCess;
-                decimal newTot = newGrsAmt + newTax;
+                decimal newTax = existing.TaxPer.HasValue ? Math.Round(newGrsAmt * (existing.TaxPer.Value / 100m), decimals)
+                                : newCgst + newSgst;
+
+                decimal? taxSplitTotal = newCgst + newSgst;
+                decimal? diffTax = newTax - taxSplitTotal;
+                if (diffTax.HasValue && Math.Abs(diffTax.Value) > 0m)
+                {
+                    newTax -= diffTax.Value;
+                    newGrsAmt += diffTax.Value;
+                }
+
+                decimal newTot = newGrsAmt + newTax + newCess;
 
                 // (E) DETAIL UPDATE — no discount in this workflow.
                 await conn.ExecuteAsync(new CommandDefinition(
@@ -1125,8 +1164,17 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     decimal targetCess = Math.Round(targetGrs * (rates.CessPer / 100m), decimals);
                     decimal targetTax = rates.TaxPer.HasValue
                         ? Math.Round(targetGrs * (rates.TaxPer.Value / 100m), decimals)
-                        : targetCgst + targetSgst + targetCess;
-                    decimal targetTot = targetGrs + targetTax;
+                        : targetCgst + targetSgst;
+
+                    decimal? taxTargetSplitTotal = targetCgst + targetSgst;
+                    decimal? diffTaxTarget = targetTax - taxTargetSplitTotal;
+                    if (diffTaxTarget.HasValue && Math.Abs(diffTaxTarget.Value) > 0.01m)
+                    {
+                        targetTax -= diffTaxTarget.Value;
+                        targetGrs -= diffTaxTarget.Value;
+                    }
+
+                    decimal targetTot = targetGrs + targetTax + targetCess;
 
                     if (targetRow is not null)
                     {
@@ -1357,8 +1405,17 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     decimal newCess = Math.Round(newGrsAmt * (existing.CessPer / 100m), decimals);
                     decimal newTax = existing.TaxPer.HasValue
                         ? Math.Round(newGrsAmt * (existing.TaxPer.Value / 100m), decimals)
-                        : newCgst + newSgst + newCess;
-                    decimal newTot = newGrsAmt + newTax;
+                        : newCgst + newSgst;
+
+                    decimal? taxSplitTotal = newCgst + newSgst;
+                    decimal? diffTax = newTax - taxSplitTotal;
+                    if (diffTax.HasValue && Math.Abs(diffTax.Value) > 0m)
+                    {
+                        newTax -= diffTax.Value;
+                        newGrsAmt += diffTax.Value;
+                    }
+
+                    decimal newTot = newGrsAmt + newTax + newCess;
 
                     await conn.ExecuteAsync(new CommandDefinition(
                         $@"UPDATE {detailTbl}
@@ -1472,8 +1529,17 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     decimal targetCess = Math.Round(targetGrs * (rates.CessPer / 100m), decimals);
                     decimal targetTax = rates.TaxPer.HasValue
                         ? Math.Round(targetGrs * (rates.TaxPer.Value / 100m), decimals)
-                        : targetCgst + targetSgst + targetCess;
-                    decimal targetTot = targetGrs + targetTax;
+                        : targetCgst + targetSgst;
+
+                    decimal? taxTargetSplitTotal = targetCgst + targetSgst;
+                    decimal? diffTaxTarget = targetTax - taxTargetSplitTotal;
+                    if (diffTaxTarget.HasValue && Math.Abs(diffTaxTarget.Value) > 0.01m)
+                    {
+                        targetTax -= diffTaxTarget.Value;
+                        targetGrs -= diffTaxTarget.Value;
+                    }
+
+                    decimal targetTot = targetGrs + targetTax + targetCess;
 
                     if (targetRow is not null)
                     {

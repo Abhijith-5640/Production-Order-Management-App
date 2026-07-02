@@ -22,13 +22,13 @@ internal static class ResultExtensions
 
     private static IResult ToHttpError(Error error) => error.Code switch
     {
-        ErrorCode.Unauthorized => Results.Json(new { success = false, message = error.Message }, statusCode: StatusCodes.Status401Unauthorized),
-        ErrorCode.Forbidden => Results.Json(new { success = false, message = error.Message }, statusCode: StatusCodes.Status403Forbidden),
-        ErrorCode.NotFound => Results.Json(new { success = false, message = error.Message }, statusCode: StatusCodes.Status404NotFound),
-        ErrorCode.InvalidInput => Results.Json(new { success = false, message = error.Message }, statusCode: StatusCodes.Status400BadRequest),
-        ErrorCode.Conflict => Results.Json(new { success = false, message = error.Message }, statusCode: StatusCodes.Status409Conflict),
+        ErrorCode.Unauthorized => Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status401Unauthorized),
+        ErrorCode.Forbidden => Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status403Forbidden),
+        ErrorCode.NotFound => Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status404NotFound),
+        ErrorCode.InvalidInput => Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status400BadRequest),
+        ErrorCode.Conflict => Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status409Conflict),
         ErrorCode.DatabaseError or ErrorCode.ConfigurationError =>
-            Results.Json(new { success = false, message = error.Message }, statusCode: StatusCodes.Status500InternalServerError),
-        _ => Results.Json(new { success = false, message = error.Message }, statusCode: StatusCodes.Status500InternalServerError)
+            Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status500InternalServerError),
+        _ => Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status500InternalServerError)
     };
 }

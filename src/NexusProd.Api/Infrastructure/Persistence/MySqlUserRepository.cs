@@ -24,13 +24,14 @@ public sealed class MySqlUserRepository : IUserRepository
     }
 
 
-    public async Task<User?> FindByUsernameAsync(string username, CancellationToken cancellationToken)
+    public async Task<User?> FindByUsernameAsync(string username, string password, CancellationToken cancellationToken)
     {
         try
         {
             await using var conn = await _factory.OpenAsync(cancellationToken);
 
             string EncodedUsr = _hasher.Encode(username);
+            string EncodedPass = _hasher.Encode(password);
             // We select the legacy `user_pass` and the new `user_pass_hash`.
             // If the hash column doesn't exist yet (pre-migration schema), the
             // AS clause simply returns NULL for that field.
@@ -46,8 +47,9 @@ public sealed class MySqlUserRepository : IUserRepository
                                 FROM ctge1075
                                 INNER JOIN INV21032 on INV21032.cashier_usr_id = ctge1075.usr_id
                                 WHERE usr_nam = @EncodedUsr
+                                AND passwd = @EncodedPass
                                 LIMIT 1";
-            var cmd = new CommandDefinition(sql, new { EncodedUsr }, cancellationToken: cancellationToken);
+            var cmd = new CommandDefinition(sql, new { EncodedUsr, EncodedPass }, cancellationToken: cancellationToken);
             return await conn.QuerySingleOrDefaultAsync<User>(cmd);
         }
         catch (Exception ex)

@@ -167,8 +167,26 @@ async function request(path, init = {}, _isRetry = false) {
         }
     }
 
+    // A concurrent tab / request already rotated this refresh token.
+    // The old JTI was superseded within the grace window — retry once
+    // using the now-updated cookie, then fall through to hard logout.
+    const isTokenAlreadyRotated =
+        response.status === 401 &&
+        body &&
+        body.error === 'token_already_rotated';
+
+    if (isTokenAlreadyRotated && !_isRetry) {
+        try {
+            await getRefreshPromise();
+            return await request(path, init, true);
+        } catch {
+            // fall through to hard logout below
+        }
+    }
+
     // Any other 401 (invalid format, wrong signing key, missing/invalid
-    // token) is a hard logout — the server can't recover with a refresh.
+    // token, or a failed token_already_rotated retry) is a hard logout —
+    // the server can't recover with a refresh.
     if (response.status === 401) {
         authStore.clearSession();
         dispatchSessionExpired();

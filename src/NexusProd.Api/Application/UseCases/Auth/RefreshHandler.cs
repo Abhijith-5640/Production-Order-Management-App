@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NexusProd.Api.Application.Abstractions;
 using NexusProd.Api.Application.Common;
 using NexusProd.Api.Domain.Entities;
+using NexusProd.Api.Infrastructure.Configuration;
 
 namespace NexusProd.Api.Application.UseCases.Auth;
 
@@ -9,8 +11,14 @@ public sealed record RefreshCommand(string RefreshToken);
 public sealed record RefreshResult(string AccessToken, DateTimeOffset AccessExpiresAt, string RefreshToken, DateTimeOffset RefreshExpiresAt);
 
 /// <summary>
-/// Validates a presented refresh token, marks the old JTI revoked, and
-/// issues a fresh access token. The refresh token itself is rotated.
+/// Validates a presented refresh token, marks the old JTI superseded (not hard-revoked),
+/// and issues a fresh access token. The refresh token itself is rotated.
+///
+/// Concurrency handling:
+/// - A JTI that was valid but superseded by a concurrent refresh within the grace window
+///   is reported as <see cref="Error.TokenAlreadyRotated"/> so the caller can retry once.
+/// - A genuinely invalid/unknown/expired/hard-revoked JTI returns <see cref="Error.Unauthorized"/>
+///   — the client must re-login.
 /// </summary>
 public sealed class RefreshHandler : IHandler<RefreshCommand, RefreshResult>
 {
@@ -19,19 +27,22 @@ public sealed class RefreshHandler : IHandler<RefreshCommand, RefreshResult>
     private readonly IUserRepository _users;
     private readonly IClock _clock;
     private readonly ILogger<RefreshHandler> _logger;
+    private readonly int _graceSeconds;
 
     public RefreshHandler(
         IJwtTokenService jwt,
         IRefreshTokenStore refreshTokens,
         IUserRepository users,
         IClock clock,
-        ILogger<RefreshHandler> logger)
+        ILogger<RefreshHandler> logger,
+        IOptions<JwtSettings> jwtOptions)
     {
         _jwt = jwt;
         _refreshTokens = refreshTokens;
         _users = users;
         _clock = clock;
         _logger = logger;
+        _graceSeconds = jwtOptions.Value.RefreshTokenRotationGraceSeconds;
     }
 
     public async Task<Result<RefreshResult>> HandleAsync(RefreshCommand request, CancellationToken cancellationToken)
@@ -52,7 +63,27 @@ public sealed class RefreshHandler : IHandler<RefreshCommand, RefreshResult>
             _logger.LogError(ex, "Refresh failed during refresh token lookup for jti {Jti}", principal.Jti);
             return Error.DatabaseError(ex.Message);
         }
-        if (userId is null) return Error.Unauthorized("Refresh token revoked or unknown");
+
+        if (userId is null)
+        {
+            // Not found in the active store. Could be genuinely invalid/expired/revoked,
+            // or it could have been superseded by a concurrent refresh within the grace window.
+            var wasSuperseded = false;
+            try
+            {
+                wasSuperseded = await _refreshTokens.WasSupersededWithinGraceAsync(
+                    principal.Jti, TimeSpan.FromSeconds(_graceSeconds), cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not check superseded-grace for jti {Jti}; treating as hard failure", principal.Jti);
+            }
+
+            if (wasSuperseded)
+                return Error.TokenAlreadyRotated("token_already_rotated");
+
+            return Error.Unauthorized("Refresh token revoked or unknown");
+        }
 
         // Look up the user so the rotated access token carries correct
         // claims (UserName, def_branch, def_counter). Without this the
@@ -75,10 +106,10 @@ public sealed class RefreshHandler : IHandler<RefreshCommand, RefreshResult>
             return Error.DatabaseError(ex.Message);
         }
 
-        // rotate: revoke old, issue new
+        // rotate: supersede old JTI (grace period applies), issue new
         try
         {
-            await _refreshTokens.RevokeAsync(principal.Jti, cancellationToken);
+            await _refreshTokens.RevokeAsync(principal.Jti, isSuperseded: true, cancellationToken);
         }
         catch (Exception ex)
         {

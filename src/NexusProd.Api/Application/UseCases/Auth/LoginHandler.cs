@@ -55,7 +55,7 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
         User? user;
         try
         {
-            user = await _users.FindByUsernameAsync(request.Username, cancellationToken);
+            user = await _users.FindByUsernameAsync(request.Username, request.Password, cancellationToken);
         }
         catch (Exception ex)
         {
