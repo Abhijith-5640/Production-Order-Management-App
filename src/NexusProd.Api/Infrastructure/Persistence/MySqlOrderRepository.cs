@@ -75,7 +75,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
             "SELECT tax_id FROM INV21001 WHERE tax_per = 0 LIMIT 1;",
             cancellationToken: cancellationToken)) ?? 0;
         var v_defTaxId = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
-            "SELECT val_data INTO v_def_tax_id FROM inv21040 WHERE key_data = 'BRANCH_DEFAULT_TAX' LIMIT 1;",
+            "SELECT val_data FROM inv21040 WHERE key_data = 'BRANCH_DEFAULT_TAX' LIMIT 1;",
             cancellationToken: cancellationToken)) ?? 0;
         var v_defTaxPer = 0m;
         if (v_defTaxId > 0)
@@ -507,15 +507,15 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         LEFT JOIN inv21001 dt ON dt.tax_id    = @defTaxId
                         SET    d.tot_amt = ROUND((
                                     CASE WHEN @isExclusive = 1
-                                         THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(COLEASCE(dt.tax_per,t.tax_per),0)/100)
+                                         THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(COALESCE(dt.tax_per,t.tax_per),0)/100)
                                             + (d.sales_qty*IFNULL(d.sales_rate, 0))
                                          ELSE d.sales_qty*IFNULL(d.sales_rate, 0) END), {CurncyDecml}),
                                d.tax_amt = ROUND((
                                     CASE WHEN @isExclusive = 1
-                                         THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(COLEASCE(dt.tax_per,t.tax_per),0)/100)
+                                         THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(COALESCE(dt.tax_per,t.tax_per),0)/100)
                                          ELSE (d.grs_amt
                                               - ((d.sales_qty*IFNULL(d.sales_rate, 0))*100)
-                                                 / (100 + IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0) + IFNULL(ct.tax_per, 0))) END), {CurncyDecml}),
+                                                 / (100 + IFNULL(COALESCE(dt.tax_per,t.tax_per), 0) + IFNULL(ct.tax_per, 0))) END), {CurncyDecml}),
                                d.cess_id  = CASE WHEN @taxKey = 'GST'
                                                   THEN IFNULL(i.cess_tax_id, @zeroTaxId)
                                                   ELSE NULL END,
@@ -526,22 +526,22 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                                   THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*IFNULL(ct.tax_per, 0)/100)
                                                   ELSE NULL END,
                                d.cgst_per = CASE WHEN @taxKey = 'GST'
-                                                  THEN (IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0) / 2)
+                                                  THEN (IFNULL(COALESCE(dt.tax_per,t.tax_per), 0) / 2)
                                                   ELSE NULL END,
                                d.cgst_amt = CASE WHEN @taxKey = 'GST'
-                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*(IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0)/2)/100)
+                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*(IFNULL(COALESCE(dt.tax_per,t.tax_per), 0)/2)/100)
                                                   ELSE NULL END,
                                d.sgst_per = CASE WHEN @taxKey = 'GST'
-                                                  THEN (IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0) / 2)
+                                                  THEN (IFNULL(COALESCE(dt.tax_per,t.tax_per), 0) / 2)
                                                   ELSE NULL END,
                                d.sgst_amt = CASE WHEN @taxKey = 'GST'
-                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*(IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0)/2)/100)
+                                                  THEN (d.sales_qty*IFNULL(d.sales_rate, 0)*(IFNULL(COALESCE(dt.tax_per,t.tax_per), 0)/2)/100)
                                                   ELSE NULL END,
                                d.grs_amt = ROUND((
                                     CASE WHEN @isExclusive = 1
                                          THEN d.sales_qty*IFNULL(d.sales_rate, 0)
                                          ELSE (d.sales_qty*IFNULL(d.sales_rate, 0)*100)
-                                            / (100 + IFNULL(COLEASCE(dt.tax_per,t.tax_per), 0) + IFNULL(ct.tax_per, 0)) END), {CurncyDecml}),
+                                            / (100 + IFNULL(COALESCE(dt.tax_per,t.tax_per), 0) + IFNULL(ct.tax_per, 0)) END), {CurncyDecml}),
                                 d.grs_amt = CASE 
 				                			WHEN @taxKey = 'GST' THEN 
 				                				d.grs_amt + (d.tax_amt - (IFNULL(d.cgst_amt,0) + IFNULL(d.sgst_amt,0)))
