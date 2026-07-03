@@ -2,6 +2,8 @@
 
 This document provides clear, step-by-step instructions for building and deploying the NexusProd application to QA environment.
 
+> **Note for Windows Users:** This guide is written for **Windows PowerShell**. If you are using WSL, Git Bash, or another shell, see the [Shell Variants](#shell-variants) section at the bottom.
+
 ---
 
 ## Table of Contents
@@ -13,6 +15,7 @@ This document provides clear, step-by-step instructions for building and deployi
 5. [Post-Deployment Verification](#post-deployment-verification)
 6. [Rollback Plan](#rollback-plan)
 7. [Important Notes](#important-notes)
+8. [Shell Variants](#shell-variants)
 
 ---
 
@@ -36,14 +39,14 @@ This document provides clear, step-by-step instructions for building and deployi
 
 ### Step 1: Clean Build Environment
 
-```bash
+```powershell
 # Navigate to project root
 cd "c:\Dev Works\Web POS\Production-Order-Management-App"
 
 # Clean any previous build outputs
-rm -rf src/NexusProd.Api/bin/Release/
-rm -rf src/NexusProd.Api/obj/
-rm -rf client/node_modules/.cache
+Remove-Item -Path "src/NexusProd.Api/bin/Release" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "src/NexusProd.Api/obj" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "client/node_modules/.cache" -Recurse -Force -ErrorAction SilentlyContinue
 
 # Install dependencies (only if changed)
 npm install --prefix client
@@ -53,10 +56,10 @@ npm install --prefix client
 
 **Check JWT Settings:**
 
-```bash
+```powershell
 # Ensure access token lifetime is 15 minutes (not 1 minute)
-grep -n "AccessTokenLifetimeMinutes" src/NexusProd.Api/appsettings.json
-# Expected: "AccessTokenLifetimeMinutes": 15,
+Select-String -Path "src/NexusProd.Api/appsettings.json" -Pattern "AccessTokenLifetimeMinutes"
+# Expected output contains: "AccessTokenLifetimeMinutes": 15,
 ```
 
 **Key Configuration Values:**
@@ -66,12 +69,12 @@ grep -n "AccessTokenLifetimeMinutes" src/NexusProd.Api/appsettings.json
 
 ### Step 3: Build Client (SPA)
 
-```bash
+```powershell
 # Build the React application
 npm run build --prefix client
 
 # Verify output directory exists
-ls -la src/NexusProd.Api/wwwroot/
+Get-ChildItem "src/NexusProd.Api/wwwroot/" -Recurse | Select-Object FullName
 ```
 
 **Expected Output:**
@@ -81,12 +84,12 @@ ls -la src/NexusProd.Api/wwwroot/
 
 ### Step 4: Publish API
 
-```bash
+```powershell
 # Publish the .NET application
 npm run publish:api
 
 # Verify published files
-ls -la src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/
+Get-ChildItem "src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/"
 ```
 
 **Expected Files in Publish Directory:**
@@ -107,19 +110,20 @@ ls -la src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/
 
 ### Step 5: Prepare Deployment Package
 
-```bash
+```powershell
 # Navigate to publish directory
-cd src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/
+Set-Location "src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/"
 
 # Create timestamped ZIP
-TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
-zip -r nexusprod-qa-${TIMESTAMP}.zip .
+$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+Compress-Archive -Path * -DestinationPath "nexusprod-qa-${timestamp}.zip" -Force
 
 # Generate SHA-256 checksum
-sha256sum nexusprod-qa-${TIMESTAMP}.zip > nexusprod-qa-${TIMESTAMP}.zip.sha256
+$hash = (Get-FileHash "nexusprod-qa-${timestamp}.zip" -Algorithm SHA256).Hash
+$hash | Out-File -FilePath "nexusprod-qa-${timestamp}.zip.sha256" -Encoding ASCII
 
 # List files in package
-ls -lah nexusprod-qa-${TIMESTAMP}.zip*
+Get-ChildItem "nexusprod-qa-${timestamp}.zip*"
 ```
 
 ### Step 6: Document Build Information
@@ -142,33 +146,37 @@ Update the deployment checklist with build details:
 ### Step 7: Backup Current Installation (if upgrading)
 
 ```powershell
-# Connect to QA server via SSH or use PowerShell remoting
+# Connect to QA server via PowerShell remoting or console
 
 # Stop existing service
 Stop-Service -Name NexusProd
 
 # Backup current installation
-$date = Get-Date -Format "yyyyMMdd-HHmmss"
-Move-Item -Path "C:\Program Files\NexusProd" -Destination "C:\Program Files\NexusProd-Bak-$date"
+$dateSuffix = Get-Date -Format "yyyyMMdd-HHmmss"
+Move-Item -Path "C:\Program Files\NexusProd" -Destination "C:\Program Files\NexusProd-Bak-$dateSuffix"
 
 # Verify backup exists
-Get-ChildItem "C:\Program Files\NexusProd-Bak-$date"
+Get-ChildItem "C:\Program Files\NexusProd-Bak-$dateSuffix"
 ```
 
 ### Step 8: Deploy New Version
 
 ```powershell
-# Copy the ZIP file to QA server
-scp nexusprod-qa-${TIMESTAMP}..zip qa-server:C:\temp\
+# Copy the ZIP file to QA server (run from build machine)
+$publishDir = "src/NexusProd.Api/bin/Release/net8.0/win-x64/publish"
+$zipFile = Get-ChildItem "$publishDir\nexusprod-qa-*.zip" | Sort-Object Name -Descending | Select-Object -First 1
+Copy-Item -Path $zipFile.FullName -Destination "\\qa-server\C$\temp\" -Force
+Copy-Item -Path "$($zipFile.FullName).sha256" -Destination "\\qa-server\C$\temp\" -Force
 
 # On QA server (via PowerShell):
-cd C:\Program Files
+Set-Location "C:\Program Files"
 
-# Extract new version
-Expand-Archive -Path "C:\temp\nexusprod-qa-${TIMESTAMP}.zip" -DestinationPath "NexusProd" -Force
+# Extract new version — use the most recent ZIP from temp
+$zipOnServer = Get-ChildItem "C:\temp\nexusprod-qa-*.zip" | Sort-Object Name -Descending | Select-Object -First 1
+Expand-Archive -Path $zipOnServer.FullName -DestinationPath "C:\Program Files\NexusProd" -Force
 
 # Verify key files exist
-Get-ChildItem "NexusProd" | Select-Object Name, LastWriteTime
+Get-ChildItem "C:\Program Files\NexusProd" | Select-Object Name, LastWriteTime
 ```
 
 ### Step 9: Install/Update Service
@@ -303,13 +311,15 @@ curl -X POST http://qa-server:8443/api/auth/login \
 
 ```powershell
 # If deployment fails, stop service and restore backup
+# Replace the backupSuffix below with the actual timestamp from Step 7
+$backupSuffix = "20240101-120000"
 Stop-Service -Name NexusProd
 
 # Remove failed installation
 Remove-Item -Path "C:\Program Files\NexusProd" -Recurse -Force
 
 # Restore from backup
-Move-Item -Path "C:\Program Files\NexusProd-Bak-$date" -Destination "C:\Program Files\NexusProd"
+Move-Item -Path "C:\Program Files\NexusProd-Bak-$backupSuffix" -Destination "C:\Program Files\NexusProd"
 
 # Start old version
 Start-Service -Name NexusProd
@@ -321,8 +331,8 @@ Start-Service -Name NexusProd
 # One-liner rollback (when you have timestamp)
 $timestamp = "20240101-120000"
 Stop-Service NexusProd
-Remove-Item C:\Program Files\NexusProd -Recurse -Force
-Move-Item "C:\Program Files\NexusProd-Bak-$timestamp" C:\Program Files\NexusProd
+Remove-Item -Path "C:\Program Files\NexusProd" -Recurse -Force
+Move-Item -Path "C:\Program Files\NexusProd-Bak-$timestamp" -Destination "C:\Program Files\NexusProd"
 Start-Service NexusProd
 ```
 
@@ -350,8 +360,8 @@ Start-Service NexusProd
 
 | Symptom | Solution |
 |---------|----------|
-| Service starts then stops | Check logs: `C:\Program Files\NexusProd\logs\` |
-| Port 8443 already in use | Find process: `netstat -ano \| findstr 8443` |
+| Service starts then stops | Check logs at `C:\Program Files\NexusProd\logs\` |
+| Port 8443 already in use | Find process: `Get-NetTCPConnection -LocalPort 8443` |
 | API health fails | Check MySQL connection, firewall, permissions |
 | SPA not loading | Verify wwwroot directory exists and has files |
 
@@ -380,4 +390,39 @@ Start-Service NexusProd
 
 ---
 
-*Note: Always test in staging environment before production deployment.*
+## Shell Variants
+
+### Git Bash / WSL / macOS / Linux
+
+If you are **not** using Windows PowerShell, use the original Unix/Linux commands shown below for **Steps 1–5 only**. Steps 7 onwards are PowerShell (QA server is Windows).
+
+```bash
+# Step 1: Clean Build Environment (Unix shells)
+cd "c:/Dev Works/Web POS/Production-Order-Management-App"
+rm -rf src/NexusProd.Api/bin/Release/
+rm -rf src/NexusProd.Api/obj/
+rm -rf client/node_modules/.cache
+npm install --prefix client
+
+# Step 2: Verify Configuration
+grep -n "AccessTokenLifetimeMinutes" src/NexusProd.Api/appsettings.json
+
+# Step 3: Build Client
+npm run build --prefix client
+ls -la src/NexusProd.Api/wwwroot/
+
+# Step 4: Publish API
+npm run publish:api
+ls -la src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/
+
+# Step 5: Package Artefacts
+cd src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/
+TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+zip -r "nexusprod-qa-${TIMESTAMP}.zip" .
+sha256sum "nexusprod-qa-${TIMESTAMP}.zip" > "nexusprod-qa-${TIMESTAMP}.zip.sha256"
+ls -lah "nexusprod-qa-${TIMESTAMP}.zip"*
+```
+
+> **Important:** Do **not** run `rm -rf` on paths containing spaces without quoting them. In Git Bash/WSL, `c:/Dev\ Works/Web\ POS/...` works, but plain `c:\Dev Works\...` does not.
+
+---
