@@ -180,11 +180,8 @@ builder.Services.AddCors(opts =>
     opts.AddDefaultPolicy(p =>
     {
         p.SetIsOriginAllowed(origin =>
-               origin == "http://localhost" || origin == "http://localhost:5099"
-            || origin == "http://localhost:8443" || origin == "https://localhost"
-            || origin == "http://127.0.0.1" || origin == "http://127.0.0.1:5099"
-            || origin == "http://127.0.0.1:8443"
-            || origin == "http://127.0.0.1:5173" || origin == "http://localhost:5173")
+               origin.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase)
+             || origin.StartsWith("http://127.0.0.1", StringComparison.OrdinalIgnoreCase))
          .AllowAnyHeader()
          .AllowAnyMethod()
          .AllowCredentials();

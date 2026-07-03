@@ -13,7 +13,8 @@ public enum ErrorCode
     Conflict,
     TokenAlreadyRotated,
     DatabaseError,
-    ConfigurationError
+    ConfigurationError,
+    InvalidCredentials
 }
 
 public sealed record Error(ErrorCode Code, string Message)
@@ -21,6 +22,7 @@ public sealed record Error(ErrorCode Code, string Message)
     public static readonly Error None = new(ErrorCode.Unknown, string.Empty);
 
     public static Error InvalidInput(string message) => new(ErrorCode.InvalidInput, message);
+    public static Error InvalidCredentials(string message) => new(ErrorCode.InvalidCredentials, message);
     public static Error NotFound(string message) => new(ErrorCode.NotFound, message);
     public static Error Unauthorized(string message) => new(ErrorCode.Unauthorized, message);
     public static Error Forbidden(string message) => new(ErrorCode.Forbidden, message);

@@ -22,6 +22,7 @@ internal static class ResultExtensions
 
     private static IResult ToHttpError(Error error) => error.Code switch
     {
+        ErrorCode.InvalidCredentials => Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status400BadRequest),
         ErrorCode.Unauthorized => Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status401Unauthorized),
         ErrorCode.Forbidden => Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status403Forbidden),
         ErrorCode.NotFound => Results.Json(new { success = false, error = error.Code.ToString().ToLowerInvariant(), message = error.Message }, statusCode: StatusCodes.Status404NotFound),

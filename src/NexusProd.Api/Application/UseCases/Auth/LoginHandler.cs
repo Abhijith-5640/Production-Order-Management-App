@@ -63,7 +63,7 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
             return Error.DatabaseError(ex.Message);
         }
         if (user is null || !user.IsActive)
-            return Error.Unauthorized("Invalid credentials");
+            return Error.InvalidCredentials("Invalid credentials");
 
         var ok = false;
         if (!string.IsNullOrEmpty(user.PasswordHash))
@@ -71,7 +71,7 @@ public sealed class LoginHandler : IHandler<LoginCommand, LoginResult>
             ok = _hasher.Verify(request.Password, user.PasswordHash);
         }
 
-        if (!ok) return Error.Unauthorized("Invalid credentials");
+        if (!ok) return Error.InvalidCredentials("Invalid credentials");
 
         var (accessToken, _, accessExpires) = _jwt.IssueAccessToken(user.Id, user.UserName, user.UserBrnchId, user.UserCounterId);
         var (refreshToken, refreshJti, refreshExpires) = _jwt.IssueRefreshToken(user.Id);

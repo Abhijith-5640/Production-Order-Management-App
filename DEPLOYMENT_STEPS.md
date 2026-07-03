@@ -22,12 +22,14 @@ This document provides clear, step-by-step instructions for building and deployi
 ## Prerequisites
 
 ### Build Machine Requirements
+
 - ✅ **.NET 8 SDK** (Verify: `dotnet --version` → should show 8.0.x)
 - ✅ **Node.js 18+** (Verify: `node --version` → >= 18.0.0)
 - ✅ **npm 9+** (Verify: `npm --version` → >= 9.0.0)
 - ✅ **Git** (Verify: `git --version` → any recent version)
 
 ### QA Environment Requirements
+
 - ✅ **Windows Server** (x64 architecture)
 - ✅ **Port 8443** open and accessible from QA network
 - ✅ **MySQL Server** reachable with proper credentials
@@ -63,6 +65,7 @@ Select-String -Path "src/NexusProd.Api/appsettings.json" -Pattern "AccessTokenLi
 ```
 
 **Key Configuration Values:**
+
 - ✅ Access Token Lifetime: **15 minutes**
 - ❌ Refresh Token Lifetime: **7 days** (unchanged)
 - ❌ Updater: **Disabled** by default
@@ -78,6 +81,7 @@ Get-ChildItem "src/NexusProd.Api/wwwroot/" -Recurse | Select-Object FullName
 ```
 
 **Expected Output:**
+
 - `src/NexusProd.Api/wwwroot/index.html`
 - `src/NexusProd.Api/wwwroot/assets/`
 - `src/NexusProd.Api/wwwroot/favicon.svg`
@@ -93,6 +97,7 @@ Get-ChildItem "src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/"
 ```
 
 **Expected Files in Publish Directory:**
+
 ```
 📁 src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/
 ├── 📄 NexusProd.Api.exe              # Self-contained executable
@@ -120,7 +125,7 @@ Compress-Archive -Path * -DestinationPath "nexusprod-qa-${timestamp}.zip" -Force
 
 # Generate SHA-256 checksum
 $hash = (Get-FileHash "nexusprod-qa-${timestamp}.zip" -Algorithm SHA256).Hash
-$hash | Out-File -FilePath "nexusprod-qa-${timestamp}.zip.sha256" -Encoding ASCII
+$hash = (Get-FileHash "nexusprod-qa-${timestamp}.zip" -Algorithm SHA256).Hash
 
 # List files in package
 Get-ChildItem "nexusprod-qa-${timestamp}.zip*"
@@ -132,6 +137,7 @@ Update the deployment checklist with build details:
 
 ```markdown
 **Build Details:**
+
 - Build Date: 2026-07-02
 - Version: [check git tag or commit hash]
 - Access Token Lifetime: 15 minutes
@@ -299,6 +305,7 @@ curl -X POST http://qa-server:8443/api/auth/login \
 ```
 
 **Expected Token Lifetime Behavior:**
+
 - ✅ Access token expires after exactly 15 minutes
 - ✅ Silent refresh should work seamlessly before expiry
 - ✅ Hard logout should occur for non-expiry 401 responses
@@ -341,16 +348,19 @@ Start-Service NexusProd
 ## Important Notes
 
 ### 1. Access Token Lifetime Changes
+
 - **Changed**: 1 minute → **15 minutes**
 - **Purpose**: Allow longer sessions without frequent refreshes
 - **QA Focus**: Verify silent refresh works within 15 minutes
 
 ### 2. Updater Functionality (SKIPPED in QA)
+
 - ❌ Do not test auto-update features
 - ❌ Do not test `/api/updater/*` endpoints
 - ❌ The updater service is disabled by default
 
 ### 3. File Locations
+
 - **Executable**: `C:\Program Files\NexusProd\NexusProd.Api.exe`
 - **Config**: `C:\Program Files\NexusProd\db_config.json`
 - **Logs**: `C:\Program Files\NexusProd\logs\`
@@ -358,14 +368,15 @@ Start-Service NexusProd
 
 ### 4. Common Issues
 
-| Symptom | Solution |
-|---------|----------|
-| Service starts then stops | Check logs at `C:\Program Files\NexusProd\logs\` |
-| Port 8443 already in use | Find process: `Get-NetTCPConnection -LocalPort 8443` |
-| API health fails | Check MySQL connection, firewall, permissions |
-| SPA not loading | Verify wwwroot directory exists and has files |
+| Symptom                   | Solution                                             |
+| ------------------------- | ---------------------------------------------------- |
+| Service starts then stops | Check logs at `C:\Program Files\NexusProd\logs\`     |
+| Port 8443 already in use  | Find process: `Get-NetTCPConnection -LocalPort 8443` |
+| API health fails          | Check MySQL connection, firewall, permissions        |
+| SPA not loading           | Verify wwwroot directory exists and has files        |
 
 ### 5. QA Testing Focus Areas
+
 1. **Access token expires after 15 minutes** (not 1 minute)
 2. **Silent refresh mechanism** works seamlessly
 3. **Login/logout functionality** as expected
