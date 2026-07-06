@@ -7,7 +7,11 @@
         "build:client": "npm run build --prefix client",
         "dev:client": "npm run dev --prefix client",
         "dev:api": "dotnet run --project src/NexusProd.Api",
-        "publish:api": "dotnet publish src/NexusProd.Api -c Release -r win-x64"
+        "publish:api": "dotnet publish src/NexusProd.Api -c Release -r win-x64",
+        "publish:helper": "dotnet publish src/NexusProd.Updater.Helper -c Release -r win-x64",
+        "publish:updater-helper": "powershell -ExecutionPolicy Bypass -File scripts/publish-helper.ps1",
+        "publish:all": "npm run publish:api && npm run publish:helper && npm run publish:updater-helper",
+        "publish:full": "powershell -ExecutionPolicy Bypass -File scripts/publish-helper.ps1"
     },
     "author": "",
     "license": "ISC"

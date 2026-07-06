@@ -101,13 +101,17 @@ Get-ChildItem "src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/"
 ```
 📁 src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/
 ├── 📄 NexusProd.Api.exe              # Self-contained executable
+├── 📄 NexusProd.Updater.Helper.exe    # Detached updater helper process
 ├── 📄 appsettings.json               # Main config
 ├── 📄 appsettings.Development.json    # Dev config
 ├── 📄 appsettings.local.json         # Local secrets (preserved)
+├── 📄 version.json                   # Current build version
 ├── 📁 wwwroot/                       # React SPA
 ├── 📁 Resources/                    # Embedded resources
 └── 📄 *.config                       .NET config files
 ```
+
+> **Note:** After `npm run publish:api`, also run `npm run publish:all` (or `npm run publish:helper && npm run publish:updater-helper`) to produce `NexusProd.Updater.Helper.exe` and `version.json` in the same directory.
 
 ---
 
@@ -123,12 +127,12 @@ Set-Location "src/NexusProd.Api/bin/Release/net8.0/win-x64/publish/"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 Compress-Archive -Path * -DestinationPath "nexusprod-qa-${timestamp}.zip" -Force
 
-# Generate SHA-256 checksum
+# Generate SHA-256 checksum and save to file
 $hash = (Get-FileHash "nexusprod-qa-${timestamp}.zip" -Algorithm SHA256).Hash
-$hash = (Get-FileHash "nexusprod-qa-${timestamp}.zip" -Algorithm SHA256).Hash
+$hash | Out-File -FilePath "nexusprod-qa-${timestamp}.zip.sha256" -Encoding ASCII
 
 # List files in package
-Get-ChildItem "nexusprod-qa-${timestamp}.zip*"
+Get-ChildItem "nexusprod-qa-${timestamp}.zip"*
 ```
 
 ### Step 6: Document Build Information
@@ -171,18 +175,18 @@ Get-ChildItem "C:\Program Files\NexusProd-Bak-$dateSuffix"
 # Copy the ZIP file to QA server (run from build machine)
 $publishDir = "src/NexusProd.Api/bin/Release/net8.0/win-x64/publish"
 $zipFile = Get-ChildItem "$publishDir\nexusprod-qa-*.zip" | Sort-Object Name -Descending | Select-Object -First 1
-Copy-Item -Path $zipFile.FullName -Destination "\\qa-server\C$\temp\" -Force
-Copy-Item -Path "$($zipFile.FullName).sha256" -Destination "\\qa-server\C$\temp\" -Force
+Copy-Item -Path $zipFile.FullName -Destination "C:\Works\POS\" -Force
+Copy-Item -Path "$($zipFile.FullName).sha256" -Destination "C:\Works\POS\" -Force
 
 # On QA server (via PowerShell):
-Set-Location "C:\Program Files"
+Set-Location "C:\Works\POS"
 
 # Extract new version — use the most recent ZIP from temp
-$zipOnServer = Get-ChildItem "C:\temp\nexusprod-qa-*.zip" | Sort-Object Name -Descending | Select-Object -First 1
-Expand-Archive -Path $zipOnServer.FullName -DestinationPath "C:\Program Files\NexusProd" -Force
+$zipOnServer = Get-ChildItem "C:\Works\POS\nexusprod-qa-*.zip" | Sort-Object Name -Descending | Select-Object -First 1
+Expand-Archive -Path $zipOnServer.FullName -DestinationPath "C:\Works\POS\NexusProd" -Force
 
 # Verify key files exist
-Get-ChildItem "C:\Program Files\NexusProd" | Select-Object Name, LastWriteTime
+Get-ChildItem "C:\Works\POS\NexusProd" | Select-Object Name, LastWriteTime
 ```
 
 ### Step 9: Install/Update Service
@@ -191,7 +195,7 @@ If this is a **new installation**:
 
 ```powershell
 # Download WinSW if not present
-Invoke-WebRequest -Uri "https://github.com/winsw/winsw/releases/latest/download/WinSW-x64.exe" -OutFile "C:\Program Files\NexusProd\WinSW-x64.exe"
+Invoke-WebRequest -Uri "https://github.com/winsw/winsw/releases/latest/download/WinSW-x64.exe" -OutFile "C:\Works\POS\NexusProd\NexusProd.exe"
 
 # Create service configuration
 @"
@@ -211,7 +215,7 @@ Invoke-WebRequest -Uri "https://github.com/winsw/winsw/releases/latest/download/
   <logmode>roll</logmode>
   <logpath>%BASE%\logs</logpath>
 </service>
-"@ | Out-File -FilePath "C:\Program Files\NexusProd\NexusProd.Api.xml" -Encoding UTF8
+"@ | Out-File -FilePath "C:\Works\POS\NexusProd\NexusProd.xml" -Encoding UTF8
 ```
 
 If **upgrading**:
@@ -236,6 +240,49 @@ If **upgrading**:
 6. Click "Save Configuration"
 
 **Note:** This creates `db_config.json` next to the executable. No restart needed for config changes.
+
+---
+
+## Client Machine Deployment (with Auto-Updater)
+
+For client (production) installations, where automatic updates are enabled:
+
+### Prerequisites
+
+- The `UpdateServerSettings:Enabled = true` in `appsettings.json` (or `appsettings.local.json`).
+- WinSW service ID **must exactly match** the `NEXUSPROD_WINSW_NAME` environment variable used when publishing, or default to `"NexusProd"`.
+  - This hard requirement ensures the helper can stop the correct service.
+- Verify that `NexusProd.Updater.Helper.exe` and `version.json` are present in the extracted install directory before first start.
+
+### First-Time Installation
+
+1. Follow **Steps 1–10** from the QA section above (build, publish, copy, extract).
+2. **Verify updater components:**
+   ```powershell
+   # In the extracted install directory:
+   Get-ChildItem "*.exe"
+   # Should include: NexusProd.Api.exe AND NexusProd.Updater.Helper.exe
+   Get-ChildItem "version.json"
+   # Should exist: { "version": "..." }
+   ```
+3. **Configure `appsettings.json`:**
+   ```json
+   {
+     "UpdateServerSettings": {
+       "Url": "https://updates.tradersm.com",
+       "CheckIntervalMinutes": 30,
+       "Enabled": true
+     }
+   }
+   ```
+4. Install the service and start as described in Step 9 (QA section).
+
+### Update Mechanism
+
+- When an update is available, the detached `NexusProd.Updater.Helper.exe` handles the stop/swap/start sequence.
+- The updater's log is available at `C:\Program Files\NexusProd\logs\updater-helper.log`.
+- The helper waits for the main API process to exit cleanly before attempting `net stop`, avoiding the deadlock.
+- If the helper fails, it attempts to restart the service to prevent a permanent outage.
 
 ---
 
@@ -353,11 +400,12 @@ Start-Service NexusProd
 - **Purpose**: Allow longer sessions without frequent refreshes
 - **QA Focus**: Verify silent refresh works within 15 minutes
 
-### 2. Updater Functionality (SKIPPED in QA)
+### 2. Updater Functionality
 
-- ❌ Do not test auto-update features
-- ❌ Do not test `/api/updater/*` endpoints
-- ❌ The updater service is disabled by default
+- **QA**: Sets `UpdateServerSettings:Enabled = false` (explicitly disable auto-updates)
+- **Client**: Sets `UpdateServerSettings:Enabled = true` to enable automatic updates
+- **QA**: Do not test `/api/updater/*` endpoints (server-side only)
+- **Client**: Auto-update runs in detached helper process; log at `logs/updater-helper.log`
 
 ### 3. File Locations
 

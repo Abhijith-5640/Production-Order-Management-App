@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO.Compression;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using NexusProd.Api.Application.Abstractions;
@@ -7,18 +6,13 @@ using NexusProd.Api.Application.Abstractions;
 namespace NexusProd.Api.Updater;
 
 /// <summary>
-/// Stops the WinSW service, swaps the new files in (preserving
-/// <c>db_config.json</c> and <c>logs/</c>), and restarts the service.
-///
-/// Production sequence:
-///   1. Run <c>net stop NexusProd</c> (WinSW)
-///   2. Unzip <c>update-pending.zip</c> over the install dir
-///   3. Update <c>version.json</c>
-///   4. Run <c>net start NexusProd</c>
+/// Validates the update package and delegates the stop → swap → start
+/// sequence to <c>NexusProd.Updater.Helper.exe</c>, which outlives this
+/// process so the WinSW service can be stopped cleanly.
 ///
 /// For the POC we keep the install path configurable via env var
-/// <c>NEXUSPROD_WINSW_NAME</c> and skip the actual WinSW calls when
-/// running interactively (e.g. <c>dotnet run</c>).
+/// <c>NEXUSPROD_WINSW_NAME</c> and skip the launch when running
+/// interactively (e.g. <c>dotnet run</c>).
 /// </summary>
 public sealed class FileSystemUpdateInstaller : IUpdateInstaller
 {
@@ -48,7 +42,7 @@ public sealed class FileSystemUpdateInstaller : IUpdateInstaller
         }
     }
 
-    public async Task ApplyUpdateAsync(string zipPath, CancellationToken cancellationToken)
+    public Task ApplyUpdateAsync(string zipPath, CancellationToken cancellationToken)
     {
         if (!File.Exists(zipPath))
             throw new FileNotFoundException("Update package not found", zipPath);
@@ -56,89 +50,51 @@ public sealed class FileSystemUpdateInstaller : IUpdateInstaller
         var winswName = Environment.GetEnvironmentVariable("NEXUSPROD_WINSW_NAME") ?? "NexusProd";
         var interactive = _env.IsDevelopment() || string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NEXUSPROD_WINSW_NAME"));
 
-        _logger.LogInformation("Applying update from {Zip} in {Dir} (interactive={Interactive})",
+        _logger.LogInformation(
+            "Applying update from {Zip} in {Dir} via helper (interactive={Interactive})",
             zipPath, _installDir, interactive);
 
-        if (!interactive)
+        if (interactive)
         {
-            await RunServiceCommand($"net stop {winswName}", cancellationToken);
+            _logger.LogWarning(
+                "Skipping update launch: interactive/dev environment detected. "
+                + "Set NEXUSPROD_WINSW_NAME to a non-empty value to enable.");
+            return Task.CompletedTask;
         }
 
-        // Preserve runtime data — copy out, then back over the new files.
-        var preservedConfig = Path.Combine(Path.GetTempPath(), "db_config.json");
-        var preservedLocal = Path.Combine(Path.GetTempPath(), "appsettings.local.json");
-        var preservedLogs = Path.Combine(Path.GetTempPath(), "logs");
+        var helperExe = Path.Combine(_installDir, "NexusProd.Updater.Helper.exe");
+        if (!File.Exists(helperExe))
+            throw new FileNotFoundException(
+                $"Updater helper not found: {helperExe}. "
+                + "Ensure NexusProd.Updater.Helper.exe is in the install directory.", helperExe);
+
+        var parentPid = Environment.ProcessId;
+        var args = $"\"{zipPath}\" \"{_installDir}\" {winswName} {parentPid}";
+
+        _logger.LogInformation("Launching updater helper: {HelperExe} {Args}", helperExe, args);
+
         try
         {
-            var cfgSrc = Path.Combine(_installDir, "db_config.json");
-            if (File.Exists(cfgSrc)) File.Copy(cfgSrc, preservedConfig, overwrite: true);
-
-            var localSrc = Path.Combine(_installDir, "appsettings.local.json");
-            if (File.Exists(localSrc)) File.Copy(localSrc, preservedLocal, overwrite: true);
-
-            var logsSrc = Path.Combine(_installDir, "logs");
-            if (Directory.Exists(logsSrc))
+            var psi = new ProcessStartInfo
             {
-                if (Directory.Exists(preservedLogs)) Directory.Delete(preservedLogs, recursive: true);
-                Directory.CreateDirectory(preservedLogs);
-                foreach (var f in Directory.GetFiles(logsSrc, "*", SearchOption.AllDirectories))
-                {
-                    var dest = Path.Combine(preservedLogs, Path.GetRelativePath(logsSrc, f));
-                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                    File.Copy(f, dest, overwrite: true);
-                }
-            }
-
-            ZipFile.ExtractToDirectory(zipPath, _installDir, overwriteFiles: true);
-
-            if (File.Exists(preservedConfig)) File.Copy(preservedConfig, Path.Combine(_installDir, "db_config.json"), overwrite: true);
-            if (File.Exists(preservedLocal)) File.Copy(preservedLocal, Path.Combine(_installDir, "appsettings.local.json"), overwrite: true);
-            if (Directory.Exists(preservedLogs))
-            {
-                var logsDst = Path.Combine(_installDir, "logs");
-                Directory.CreateDirectory(logsDst);
-                foreach (var f in Directory.GetFiles(preservedLogs, "*", SearchOption.AllDirectories))
-                {
-                    var dest = Path.Combine(logsDst, Path.GetRelativePath(preservedLogs, f));
-                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                    File.Copy(f, dest, overwrite: true);
-                }
-            }
-        }
-        finally
-        {
-            // Best-effort cleanup.
-            try { if (File.Exists(preservedConfig)) File.Delete(preservedConfig); } catch { }
-            try { if (File.Exists(preservedLocal)) File.Delete(preservedLocal); } catch { }
-            try { if (Directory.Exists(preservedLogs)) Directory.Delete(preservedLogs, recursive: true); } catch { }
-            try { File.Delete(zipPath); } catch { }
-        }
-
-        if (!interactive)
-        {
-            await RunServiceCommand($"net start {winswName}", cancellationToken);
-        }
-    }
-
-    private async Task RunServiceCommand(string command, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo("cmd.exe", $"/c {command}")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
+                FileName = helperExe,
+                Arguments = args,
+                WorkingDirectory = _installDir,
+                UseShellExecute = true,
                 CreateNoWindow = true
             };
-            using var p = Process.Start(psi)!;
-            await p.WaitForExitAsync(cancellationToken);
-            _logger.LogInformation("Executed: {Command} → exit {Code}", command, p.ExitCode);
+
+            // Detach from this process — the helper outlives us.
+            _ = Process.Start(psi);
+
+            _logger.LogInformation("Updater helper launched (PID {ParentPid}). Returning immediately.", parentPid);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Service command failed: {Command}", command);
+            _logger.LogError(ex, "Failed to launch updater helper: {HelperExe}", helperExe);
             throw;
         }
+
+        return Task.CompletedTask;
     }
 }
