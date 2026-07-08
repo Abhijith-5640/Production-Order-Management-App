@@ -18,7 +18,7 @@ $apiProj        = Join-Path $repoRoot "src/NexusProd.Api/NexusProd.Api.csproj"
 $helperProj     = Join-Path $repoRoot "src/NexusProd.Updater.Helper/NexusProd.Updater.Helper.csproj"
 $clientDir      = Join-Path $repoRoot "client"
 $apiPublishDir  = Join-Path $repoRoot "src/NexusProd.Api/bin/Release/net8.0/win-x64/publish"
-$helperExeName  = "NexusProd.Updater.Helper.exe"
+$helperExeName  = "NexusProd.exe"
 $versionJson    = Join-Path $apiPublishDir "version.json"
 $timestamp      = Get-Date -Format "yyyyMMdd-HHmmss"
 $zipName        = "nexusprod-qa-${timestamp}.zip"
@@ -58,6 +58,12 @@ Write-Host "  Client build done."
 # ══════════════════════════════════════════════════════════════════════════════
 # [3/6] Publish API
 # ══════════════════════════════════════════════════════════════════════════════
+# [3a/7] Build API
+Write-Host "`n[3a/7] Building API…"
+dotnet build $apiProj -c Release -r win-x64 --no-incremental
+Write-Host "  API build done."
+
+
 Write-Host "`n[3/6] Publishing API…"
 dotnet publish $apiProj -c Release -r win-x64 -p:PublishSingleFile=true
 Write-Host "  API publish done."

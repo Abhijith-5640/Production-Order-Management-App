@@ -1,209 +1,336 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Threading;
+using System.Text;
 
-// Usage: NexusProd.Updater.Helper <zipPath> <installDir> <winswServiceName> <parentPid>
-if (args.Length < 4)
-{
-    Console.Error.WriteLine("Usage: NexusProd.Updater.Helper <zipPath> <installDir> <winswServiceName> <parentPid>");
-    Environment.Exit(1);
-}
+/// <summary>
+/// User-space bootstrapper launcher for NexusProd.
+/// Runs in the background without a visible window, starts the API process,
+/// monitors its lifetime, and handles auto-updates via the update-pending.zip mechanism.
+/// </summary>
 
-var zipPath = args[0];
-var installDir = args[1];
-var winswServiceName = args[2];
-var parentPidArg = args[3];
-
-if (!int.TryParse(parentPidArg, out var parentPid))
-{
-    Console.Error.WriteLine($"Invalid parent PID: {parentPidArg}");
-    Environment.Exit(1);
-}
-
+var installDir = AppContext.BaseDirectory;
 var logDir = Path.Combine(installDir, "logs");
-var logFile = Path.Combine(logDir, "updater-helper.log");
+var launcherLog = Path.Combine(logDir, "launcher.log");
+var apiLog = Path.Combine(logDir, "api.log");
 
 try { Directory.CreateDirectory(logDir); } catch { /* best-effort */ }
+
+// Thread-safe, auto-rolling file logger
+object _logLock = new();
+const long MaxLogBytes = 10 * 1024 * 1024; // 10MB
 
 void Log(string message)
 {
     try
     {
-        var line = $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} UTC] {message}";
-        File.AppendAllText(logFile, line + Environment.NewLine);
+        lock (_logLock)
+        {
+            var line = $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} UTC] [Launcher] {message}";
+            RollLogIfNeeded(launcherLog);
+            File.AppendAllText(launcherLog, line + Environment.NewLine);
+        }
     }
     catch { /* swallow logging failures */ }
 }
 
-try
+void RollLogIfNeeded(string path)
 {
-    Log($"Updater helper started — zip={zipPath}, installDir={installDir}, service={winswServiceName}, parentPid={parentPid}");
-
-    // ── Step 3: Wait for parent process to exit ──────────────────────────
     try
     {
-        using var parent = Process.GetProcessById(parentPid);
-        Log($"Waiting for parent process {parentPid} to exit (timeout 30s)…");
-        parent.WaitForExit(TimeSpan.FromSeconds(30));
-        Log($"Parent process {parentPid} has exited.");
-    }
-    catch (ArgumentException)
-    {
-        Log($"Parent process {parentPid} already gone — proceeding.");
-    }
-    catch (Exception ex)
-    {
-        Log($"Parent wait warning: {ex.Message} — proceeding anyway.");
-    }
+        if (!File.Exists(path)) return;
+        var fi = new FileInfo(path);
+        if (fi.Length < MaxLogBytes) return;
 
-    // ── Step 4: net stop ─────────────────────────────────────────────────
-    Log($"Running: net stop {winswServiceName}");
-    var stopResult = RunCommand($"net stop {winswServiceName}");
-    Log($"net stop → exit {stopResult.ExitCode}; stdout: {stopResult.StdOut}; stderr: {stopResult.StdErr}");
-
-    // ── Step 5: Preserve runtime files ──────────────────────────────────
-    var preservedConfig = Path.Combine(Path.GetTempPath(), "db_config.json");
-    var preservedLocal = Path.Combine(Path.GetTempPath(), "appsettings.local.json");
-    var preservedLogs = Path.Combine(Path.GetTempPath(), "logs");
-
-    var cfgSrc = Path.Combine(installDir, "db_config.json");
-    if (File.Exists(cfgSrc))
-    {
-        File.Copy(cfgSrc, preservedConfig, overwrite: true);
-        Log($"Preserved db_config.json");
+        var oldPath = path + ".old";
+        try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { }
+        File.Move(path, oldPath);
     }
+    catch { /* swallow */ }
+}
 
-    var localSrc = Path.Combine(installDir, "appsettings.local.json");
-    if (File.Exists(localSrc))
+void LogApiLine(string line, bool isError)
+{
+    try
     {
-        File.Copy(localSrc, preservedLocal, overwrite: true);
-        Log($"Preserved appsettings.local.json");
-    }
-
-    var logsSrc = Path.Combine(installDir, "logs");
-    if (Directory.Exists(logsSrc))
-    {
-        if (Directory.Exists(preservedLogs)) Directory.Delete(preservedLogs, recursive: true);
-        Directory.CreateDirectory(preservedLogs);
-        foreach (var f in Directory.GetFiles(logsSrc, "*", SearchOption.AllDirectories))
+        lock (_logLock)
         {
-            var dest = Path.Combine(preservedLogs, Path.GetRelativePath(logsSrc, f));
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            File.Copy(f, dest, overwrite: true);
+            RollLogIfNeeded(apiLog);
+            var prefix = isError ? "[API-ERR]" : "[API]";
+            File.AppendAllText(apiLog, $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} UTC] {prefix} {line}{Environment.NewLine}");
         }
-        Log($"Preserved logs/ ({Directory.GetFiles(preservedLogs, "*", SearchOption.AllDirectories).Length} files)");
     }
+    catch { /* swallow */ }
+}
 
-    // ── Step 6: Extract with retry ──────────────────────────────────────
-    const int maxAttempts = 5;
-    var extracted = false;
-    for (var attempt = 1; attempt <= maxAttempts; attempt++)
+// ── Helper: run a detached cmd to perform file operations ───────────────────
+void DetachedDelete(string path)
+{
+    try
     {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = $"/c del /F \"{path}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        using var p = Process.Start(psi);
+        p?.WaitForExit();
+    }
+    catch { /* best-effort */ }
+}
+
+Log("========================================");
+Log("NexusProd Launcher starting.");
+Log($"Install dir: {installDir}");
+
+// ── Crash tracking helpers ────────────────────────────────────────────────
+var crashLogPath = Path.Combine(logDir, "crash-count.txt");
+
+int GetCrashCount()
+    => int.TryParse(File.Exists(crashLogPath) ? File.ReadAllText(crashLogPath).Trim() : "", out var c) ? c : 0;
+
+void IncrementCrashCount()
+    { try { File.WriteAllText(crashLogPath, GetCrashCount().ToString()); } catch { } }
+
+void ResetCrashCount()
+    { try { if (File.Exists(crashLogPath)) File.Delete(crashLogPath); } catch { } }
+
+DateTime? GetFirstCrashTime()
+{
+    var path = Path.Combine(logDir, "first-crash.txt");
+    return DateTime.TryParse(File.Exists(path) ? File.ReadAllText(path).Trim() : "", out var t) ? t : null;
+}
+
+void SetFirstCrashTime()
+{
+    var path = Path.Combine(logDir, "first-crash.txt");
+    try { File.WriteAllText(path, DateTime.UtcNow.ToString("O")); } catch { }
+}
+
+void ClearFirstCrashTime()
+{
+    var path = Path.Combine(logDir, "first-crash.txt");
+    try { if (File.Exists(path)) File.Delete(path); } catch { }
+}
+
+// ── Constants ────────────────────────────────────────────────────────────
+const int ExitCodeUpdatePending = 100;
+const int ExitCodeGracefulShutdown = 0;
+const int MaxConsecutiveCrashes = 5;
+var watch = System.Diagnostics.Stopwatch.StartNew();
+
+// ── Main launcher loop ───────────────────────────────────────────────────
+while (true)
+{
+    // ── Check for pending update (NexusProd.exe.new) on every loop iteration ───
+    var newExePath = Path.Combine(installDir, "NexusProd.exe.new");
+    if (File.Exists(newExePath))
+    {
+        Log("Found NexusProd.exe.new — applying update...");
+
+        var currentExe = Path.Combine(installDir, "NexusProd.exe");
+        var backupExe = Path.Combine(installDir, "NexusProd.exe.bak");
+
         try
         {
-            ZipFile.ExtractToDirectory(zipPath, installDir, overwriteFiles: true);
-            extracted = true;
-            Log($"Extracted update package (attempt {attempt}/{maxAttempts}).");
-            break;
-        }
-        catch (IOException ex)
-        {
-            Log($"Extract attempt {attempt}/{maxAttempts} failed (IO): {ex.Message}. Retrying in 1s…");
-            if (attempt < maxAttempts) Thread.Sleep(TimeSpan.FromSeconds(1));
+            // Backup current
+            if (File.Exists(currentExe))
+            {
+                if (File.Exists(backupExe)) File.Delete(backupExe);
+                File.Move(currentExe, backupExe);
+            }
+
+            // Move new to current
+            File.Move(newExePath, currentExe);
+
+            // Start the new version and exit
+            Log("Starting updated NexusProd.exe...");
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = currentExe,
+                UseShellExecute = true
+            };
+            Process.Start(startInfo);
+            Log("Update complete. Exiting old launcher.");
+            Environment.Exit(0);
         }
         catch (Exception ex)
         {
-            Log($"Extract attempt {attempt}/{maxAttempts} failed: {ex.Message}. Retrying in 1s…");
-            if (attempt < maxAttempts) Thread.Sleep(TimeSpan.FromSeconds(1));
+            Log($"ERROR applying .new update: {ex.Message}. Restoring backup.");
+            try
+            {
+                if (File.Exists(backupExe)) File.Move(backupExe, currentExe, overwrite: true);
+            }
+            catch { }
         }
     }
 
-    if (!extracted)
+    // ── Check for update-pending.zip on every loop iteration ───────────────────
+    var pendingZip = Path.Combine(installDir, "update-pending.zip");
+    if (File.Exists(pendingZip))
     {
-        throw new IOException($"Failed to extract update package after {maxAttempts} attempts.");
-    }
+        Log("Found update-pending.zip — extracting update...");
 
-    // ── Step 7: Restore preserved files ─────────────────────────────────
-    if (File.Exists(preservedConfig))
-    {
-        File.Copy(preservedConfig, Path.Combine(installDir, "db_config.json"), overwrite: true);
-        Log($"Restored db_config.json");
-    }
+        // Wait for handles to clear
+        Thread.Sleep(TimeSpan.FromSeconds(1));
 
-    if (File.Exists(preservedLocal))
-    {
-        File.Copy(preservedLocal, Path.Combine(installDir, "appsettings.local.json"), overwrite: true);
-        Log($"Restored appsettings.local.json");
-    }
-
-    if (Directory.Exists(preservedLogs))
-    {
-        var logsDst = Path.Combine(installDir, "logs");
-        Directory.CreateDirectory(logsDst);
-        foreach (var f in Directory.GetFiles(preservedLogs, "*", SearchOption.AllDirectories))
+        var extractDir = Path.Combine(Path.GetTempPath(), $"nexusprod-update-{Guid.NewGuid():N}");
+        try
         {
-            var dest = Path.Combine(logsDst, Path.GetRelativePath(preservedLogs, f));
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            File.Copy(f, dest, overwrite: true);
+            Directory.CreateDirectory(extractDir);
+            ZipFile.ExtractToDirectory(pendingZip, extractDir);
+
+            // Copy files, handling locked NexusProd.Api.exe
+            foreach (var file in Directory.GetFiles(extractDir, "*", SearchOption.AllDirectories))
+            {
+                var relativePath = Path.GetRelativePath(extractDir, file);
+                var destPath = Path.Combine(installDir, relativePath);
+
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+
+                    // If this is NexusProd.Api.exe, write as .new to avoid locked-file issues
+                    if (string.Equals(relativePath, "NexusProd.Api.exe", StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Copy(file, destPath + ".new", overwrite: true);
+                        Log($"Copied NexusProd.Api.exe as .new");
+                    }
+                    else
+                    {
+                        File.Copy(file, destPath, overwrite: true);
+                    }
+                }
+                catch (IOException ex)
+                {
+                    Log($"Skipped locked file: {relativePath} ({ex.Message})");
+                }
+            }
+
+            Log("Update extraction complete.");
         }
-        Log($"Restored logs/");
+        catch (Exception ex)
+        {
+            Log($"ERROR extracting update: {ex.Message}");
+        }
+        finally
+        {
+            try { Directory.Delete(extractDir, recursive: true); } catch { }
+        }
+
+        // Clean up the zip
+        DetachedDelete(pendingZip);
+        try { File.Delete(pendingZip); } catch { }
     }
 
-    // ── Step 8: Cleanup ────────────────────────────────────────────────
-    try { if (File.Exists(preservedConfig)) File.Delete(preservedConfig); } catch { }
-    try { if (File.Exists(preservedLocal)) File.Delete(preservedLocal); } catch { }
-    try { if (Directory.Exists(preservedLogs)) Directory.Delete(preservedLogs, recursive: true); } catch { }
-    try { File.Delete(zipPath); } catch { }
-    Log("Cleaned up temp files.");
-
-    // ── Step 9: net start ──────────────────────────────────────────────
-    Log($"Running: net start {winswServiceName}");
-    var startResult = RunCommand($"net start {winswServiceName}");
-    Log($"net start → exit {startResult.ExitCode}; stdout: {startResult.StdOut}; stderr: {startResult.StdErr}");
-
-    Log("Update applied successfully. Helper exiting with code 0.");
-    Environment.Exit(0);
-}
-catch (Exception ex)
-{
-    Log($"FATAL ERROR: {ex.GetType().Name}: {ex.Message}{Environment.NewLine}{ex.StackTrace}");
-
-    // ── Step 10 (error path): best-effort net start ───────────────────
-    try
+    // ── Start NexusProd.Api.exe ───────────────────────────────────────────────
+    var apiExe = Path.Combine(installDir, "NexusProd.Api.exe");
+    if (!File.Exists(apiExe))
     {
-        Log($"Best-effort net start {winswServiceName} after failure…");
-        var recoveryResult = RunCommand($"net start {winswServiceName}");
-        Log($"Recovery net start → exit {recoveryResult.ExitCode}; stdout: {recoveryResult.StdOut}; stderr: {recoveryResult.StdErr}");
-    }
-    catch (Exception recoveryEx)
-    {
-        Log($"Recovery net start also failed: {recoveryEx.Message}");
+        Log($"ERROR: NexusProd.Api.exe not found in {installDir}. Waiting for file...");
+        Thread.Sleep(TimeSpan.FromSeconds(10));
+        continue;
     }
 
-    Log("Helper exiting with code 1.");
-    Environment.Exit(1);
-}
-
-// ── Helper: run a command and capture output ──────────────────────────────
-// Reads stdout/stderr BEFORE WaitForExit to avoid pipe-buffer deadlocks.
-static (int ExitCode, string StdOut, string StdErr) RunCommand(string command)
-{
-    var psi = new ProcessStartInfo("cmd.exe", $"/c {command}")
+    // Check crash window (60 seconds)
+    var firstCrash = GetFirstCrashTime();
+    if (firstCrash.HasValue && (DateTime.UtcNow - firstCrash.Value).TotalSeconds > 60)
     {
+        Log("60-second crash window expired. Resetting crash counter.");
+        ResetCrashCount();
+        ClearFirstCrashTime();
+    }
+
+    var crashCount = GetCrashCount();
+    if (crashCount >= MaxConsecutiveCrashes)
+    {
+        Log($"FATAL: Reached {MaxConsecutiveCrashes} consecutive crashes within 60 seconds. Shutting down launcher.");
+        Log("Manual intervention required. Delete logs/ first to reset.");
+        break;
+    }
+
+    Log($"Starting NexusProd.Api.exe (crash #{crashCount + 1}/{MaxConsecutiveCrashes})...");
+
+    var psi = new ProcessStartInfo
+    {
+        FileName = apiExe,
+        Arguments = "--urls=http://0.0.0.0:5099",
+        WorkingDirectory = installDir,
         RedirectStandardOutput = true,
         RedirectStandardError = true,
         UseShellExecute = false,
         CreateNoWindow = true
     };
 
-    using var p = Process.Start(psi)!;
+    using var apiProcess = Process.Start(psi);
+    if (apiProcess == null)
+    {
+        Log("ERROR: Failed to start NexusProd.Api.exe process.");
+        Thread.Sleep(TimeSpan.FromSeconds(5));
+        continue;
+    }
 
-    var stdoutTask = p.StandardOutput.ReadToEndAsync();
-    var stderrTask = p.StandardError.ReadToEndAsync();
-    p.WaitForExit();
+    // Stream stdout
+    var stdoutTask = Task.Run(async () =>
+    {
+        try
+        {
+            while (!apiProcess.StandardOutput.EndOfStream)
+            {
+                var line = await apiProcess.StandardOutput.ReadLineAsync();
+                if (line != null) LogApiLine(line, isError: false);
+            }
+        }
+        catch { }
+    });
 
-    var stdout = stdoutTask.Result;
-    var stderr = stderrTask.Result;
+    // Stream stderr
+    var stderrTask = Task.Run(async () =>
+    {
+        try
+        {
+            while (!apiProcess.StandardError.EndOfStream)
+            {
+                var line = await apiProcess.StandardError.ReadLineAsync();
+                if (line != null) LogApiLine(line, isError: true);
+            }
+        }
+        catch { }
+    });
 
-    return (p.ExitCode, stdout.Trim(), stderr.Trim());
+    // Wait for API to exit
+    apiProcess.WaitForExit();
+    var exitCode = apiProcess.ExitCode;
+
+    // Drain output streams
+    try { await stdoutTask; } catch { }
+    try { await stderrTask; } catch { }
+
+    Log($"NexusProd.Api.exe exited with code {exitCode} after {watch.Elapsed.TotalSeconds:F1}s.");
+
+    if (exitCode == ExitCodeGracefulShutdown)
+    {
+        Log("Graceful shutdown requested. Exiting launcher.");
+        break;
+    }
+    else if (exitCode == ExitCodeUpdatePending)
+    {
+        Log("Update pending signal received. Looping to apply update...");
+        continue; // Go back to top of loop to check for update-pending.zip
+    }
+    else
+    {
+        // Crash - increment and wait
+        IncrementCrashCount();
+        if (GetCrashCount() == 1)
+        {
+            SetFirstCrashTime();
+        }
+
+        Log($"Crash detected. Waiting 3 seconds before restart...");
+        Thread.Sleep(TimeSpan.FromSeconds(3));
+    }
 }
+
+Log("NexusProd Launcher stopped.");

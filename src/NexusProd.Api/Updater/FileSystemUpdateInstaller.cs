@@ -1,28 +1,19 @@
-using System.Diagnostics;
 using System.Text.Json;
-using Microsoft.Extensions.Hosting;
 using NexusProd.Api.Application.Abstractions;
-
-namespace NexusProd.Api.Updater;
+using NexusProd.Api.Updater;
 
 /// <summary>
-/// Validates the update package and delegates the stop → swap → start
-/// sequence to <c>NexusProd.Updater.Helper.exe</c>, which outlives this
-/// process so the WinSW service can be stopped cleanly.
-///
-/// For the POC we keep the install path configurable via env var
-/// <c>NEXUSPROD_WINSW_NAME</c> and skip the launch when running
-/// interactively (e.g. <c>dotnet run</c>).
+/// Writes the downloaded package to <c>update-pending.zip</c> and signals the
+/// NexusProd user-space launcher to restart by calling <c>Environment.Exit(100)</c>.
 /// </summary>
 public sealed class FileSystemUpdateInstaller : IUpdateInstaller
 {
-    private readonly IWebHostEnvironment _env;
     private readonly ILogger<FileSystemUpdateInstaller> _logger;
     private readonly string _installDir;
 
-    public FileSystemUpdateInstaller(IWebHostEnvironment env, ILogger<FileSystemUpdateInstaller> logger)
+    public FileSystemUpdateInstaller(
+        ILogger<FileSystemUpdateInstaller> logger)
     {
-        _env = env;
         _logger = logger;
         _installDir = AppContext.BaseDirectory;
     }
@@ -42,59 +33,26 @@ public sealed class FileSystemUpdateInstaller : IUpdateInstaller
         }
     }
 
-    public Task ApplyUpdateAsync(string zipPath, CancellationToken cancellationToken)
+    public async Task ApplyUpdateAsync(string zipPath, CancellationToken cancellationToken)
     {
         if (!File.Exists(zipPath))
             throw new FileNotFoundException("Update package not found", zipPath);
 
-        var winswName = Environment.GetEnvironmentVariable("NEXUSPROD_WINSW_NAME") ?? "NexusProd";
-        var interactive = _env.IsDevelopment() || string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NEXUSPROD_WINSW_NAME"));
-
         _logger.LogInformation(
-            "Applying update from {Zip} in {Dir} via helper (interactive={Interactive})",
-            zipPath, _installDir, interactive);
+            "Applying update from {Zip} in {Dir}",
+            zipPath, _installDir);
 
-        if (interactive)
-        {
-            _logger.LogWarning(
-                "Skipping update launch: interactive/dev environment detected. "
-                + "Set NEXUSPROD_WINSW_NAME to a non-empty value to enable.");
-            return Task.CompletedTask;
-        }
+        var pendingZip = Path.Combine(_installDir, "update-pending.zip");
 
-        var helperExe = Path.Combine(_installDir, "NexusProd.Updater.Helper.exe");
-        if (!File.Exists(helperExe))
-            throw new FileNotFoundException(
-                $"Updater helper not found: {helperExe}. "
-                + "Ensure NexusProd.Updater.Helper.exe is in the install directory.", helperExe);
+        // The zip is already at the correct location (downloaded by AppUpdater)
+        // No copy needed - just signal the launcher
+        _logger.LogInformation("Update package ready at {PendingZip}. Signaling launcher to restart.", pendingZip);
 
-        var parentPid = Environment.ProcessId;
-        var args = $"\"{zipPath}\" \"{_installDir}\" {winswName} {parentPid}";
+        // Wait 1 second for logs to flush
+        await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
 
-        _logger.LogInformation("Launching updater helper: {HelperExe} {Args}", helperExe, args);
-
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = helperExe,
-                Arguments = args,
-                WorkingDirectory = _installDir,
-                UseShellExecute = true,
-                CreateNoWindow = true
-            };
-
-            // Detach from this process — the helper outlives us.
-            _ = Process.Start(psi);
-
-            _logger.LogInformation("Updater helper launched (PID {ParentPid}). Returning immediately.", parentPid);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to launch updater helper: {HelperExe}", helperExe);
-            throw;
-        }
-
-        return Task.CompletedTask;
+        // Signal the launcher to restart us
+        _logger.LogWarning("Exiting with code 100 to trigger launcher restart...");
+        Environment.Exit(100);
     }
 }
