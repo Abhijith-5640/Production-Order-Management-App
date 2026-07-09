@@ -226,6 +226,8 @@ export const api = {
         body: JSON.stringify({ itemId, trip, distribution, usrId }),
     }),
 
+    getConfigStatus: () => request('/config/status'),
+
     saveConfig: (configData) => request('/config/save', {
         method: 'POST',
         body: JSON.stringify(configData),

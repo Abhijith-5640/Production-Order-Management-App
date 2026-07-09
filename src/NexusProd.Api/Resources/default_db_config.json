@@ -5,6 +5,6 @@
     "port": 3306,
     "user": "root",
     "password": "admin@5555",
-    "database": "prod_app"
+    "database": "trader_sm_qa"
   }
 }

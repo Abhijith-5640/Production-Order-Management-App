@@ -24,3 +24,11 @@ public sealed record UpdateStatusResponse(
     string? Message,
     string? LatestVersion,
     DateTimeOffset? LastChecked);
+
+public sealed record ConfigStatusResponse(
+    bool Configured,
+    string Host,
+    int Port,
+    string Database,
+    string User,
+    string Password);

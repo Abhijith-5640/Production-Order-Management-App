@@ -34,6 +34,7 @@ public static class DependencyInjection
         services.AddScoped<IHandler<GetServerInfoQuery, ServerInfoView>, GetServerInfoHandler>();
 
         // Config
+        services.AddScoped<IHandler<GetConfigStatusQuery, GetConfigStatusResult>, GetConfigStatusHandler>();
         services.AddScoped<IHandler<SaveConfigCommand, string>, SaveConfigHandler>();
         services.AddScoped<IHandler<TestDbCommand, string>, TestDbHandler>();
         services.AddScoped<IHandler<CheckUpdateCommand, CheckUpdateResult>, CheckUpdateHandler>();

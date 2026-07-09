@@ -10,6 +10,13 @@ public static class ConfigEndpoints
     {
         var group = app.MapGroup("/api/config").WithTags("Config").AllowAnonymous();
 
+        group.MapGet("/status", async (IHandler<GetConfigStatusQuery, GetConfigStatusResult> h, CancellationToken ct) =>
+        {
+            var r = await h.HandleAsync(new GetConfigStatusQuery(), ct);
+            return r.ToHttp(v => Results.Ok(new ConfigStatusResponse(
+                v.Configured, v.Host, v.Port, v.Database, v.User, v.Password)));
+        });
+
         group.MapPost("/save", async (DbConfigRequest req, IHandler<SaveConfigCommand, string> h, CancellationToken ct) =>
         {
             var r = await h.HandleAsync(new SaveConfigCommand(req.Host, req.Port, req.User, req.Password, req.Database, req.UseMockDb), ct);

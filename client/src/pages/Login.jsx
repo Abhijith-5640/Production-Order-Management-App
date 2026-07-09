@@ -13,21 +13,31 @@ const Login = () => {
     const [dbConfig, setDbConfig] = useState({ host: '', port: '3306', database: '', user: '', password: '' });
 
     useEffect(() => {
-        // Debug helper: ensure a debug session always starts at a clean Login.
         if (import.meta.env.DEV) {
             authStore.clearSession();
         }
-        // Load config on mount
+
         const savedConfig = JSON.parse(localStorage.getItem('db_config') || '{}');
         if (Object.keys(savedConfig).length > 0) {
-            setDbConfig({ ...dbConfig, ...savedConfig });
+            setDbConfig(prev => ({ ...prev, ...savedConfig }));
+        } else {
+            api.getConfigStatus()
+                .then(status => {
+                    if (status.configured) {
+                        const serverCfg = {
+                            host:     status.host,
+                            port:     String(status.port),
+                            database: status.database,
+                            user:     status.user,
+                            password: status.password,
+                        };
+                        setDbConfig(prev => ({ ...prev, ...serverCfg }));
+                        localStorage.setItem('db_config', JSON.stringify(serverCfg));
+                    }
+                })
+                .catch(() => { /* server unreachable — user fills config manually */ });
         }
 
-        // Inform the user when their session expired. Navigation is owned
-        // by the SessionExpiredBridge in App.jsx — this listener only
-        // surfaces the toast so the user knows why they were bounced.
-        // The toast only fires once because dispatchSessionExpired()
-        // debounces duplicate events within a 1s window.
         const onSessionExpired = () => {
             toast.info('Your session has expired. Please sign in again.');
         };
