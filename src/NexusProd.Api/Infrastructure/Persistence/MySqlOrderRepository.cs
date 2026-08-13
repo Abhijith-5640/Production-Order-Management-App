@@ -688,10 +688,35 @@ public sealed class MySqlOrderRepository : IOrderRepository
             if (CatId > 0)
             {
                 var rows = await conn.QueryAsync<SectionDto>(new CommandDefinition(
-                    @"SELECT prdt_cat_val_id AS Id, prdt_cat_val_nam AS Name
-                      FROM inv20005
-                      WHERE prdt_catgry_id = @CatId
-                      AND is_enable = 1",
+                    @"SELECT DISTINCT pc.prdt_cat_val_id AS Id, 
+                                      cv.prdt_cat_val_nam AS Name
+                      FROM inv20005 cv
+                      JOIN INV21013 pc ON pc.prdt_cat_val_id = cv.prdt_cat_val_id
+                      WHERE cv.prdt_catgry_id = @CatId
+                        AND cv.is_enable = 1
+                        AND (
+                          EXISTS (
+                              SELECT 1 FROM INV31065BS bs
+                              JOIN INV31065 sm ON bs.sales_mast_id = sm.sales_mast_id
+                              JOIN INV31066 sd ON sd.sales_mast_id = sm.sales_mast_id
+                              JOIN INV21050 s ON s.stock_mast_id = sd.stock_mast_id
+                              WHERE bs.trip_no IS NOT NULL
+                                AND IFNULL(bs.is_for_transfer, 0) = 0
+                                AND s.itm_mast_id = pc.itm_mast_id
+                                AND CAST(sm.sales_date AS DATE) = CURDATE()
+                          )
+                          OR EXISTS (
+                              SELECT 1 FROM INV31065BS bs
+                              JOIN INV31065bsd sm ON bs.sales_mast_id = sm.sales_mast_id
+                              JOIN INV31066bsd sd ON sd.sales_mast_id = sm.sales_mast_id
+                              JOIN INV21050 s ON s.stock_mast_id = sd.stock_mast_id
+                              WHERE bs.trip_no IS NOT NULL
+                                AND IFNULL(bs.is_for_transfer, 0) = 1
+                                AND s.itm_mast_id = pc.itm_mast_id
+                                AND CAST(sm.sales_date AS DATE) = CURDATE()
+                          )
+                        )
+                      ORDER BY cv.prdt_cat_val_nam ASC;",
                     new { CatId }, cancellationToken: cancellationToken));
                 sections = rows.ToList();
             }
@@ -713,12 +738,35 @@ public sealed class MySqlOrderRepository : IOrderRepository
             await using var conn = await _factory.OpenAsync(cancellationToken);
             var rows = await conn.QueryAsync<TripsM>(new CommandDefinition(
                 @"SELECT DISTINCT t.id AS Id,
-                  				t.trip AS Trip
+                         t.trip AS Trip
                   FROM Trip t
-                  JOIN INV31065BS bsm ON bsm.trip_no = t.id
-                  WHERE bsm.createdDt >= CURDATE()
-                  AND bsm.createdDt < CURDATE() + INTERVAL 1 DAY
-                  ORDER BY trip_seq ASC",
+                  WHERE EXISTS (
+                      -- Sale: inv31065/66 path
+                      SELECT 1 FROM INV31065BS bs
+                      JOIN INV31065 sm ON bs.sales_mast_id = sm.sales_mast_id
+                      JOIN INV31066 sd ON sd.sales_mast_id = sm.sales_mast_id
+                      JOIN INV21050 s ON s.stock_mast_id = sd.stock_mast_id
+                      JOIN INV21013 pc ON pc.itm_mast_id = s.itm_mast_id
+                      WHERE bs.trip_no = t.id
+                        AND IFNULL(bs.is_for_transfer, 0) = 0
+                        AND pc.prdt_cat_val_id = @SecId
+                        AND pc.prdt_cat_id = (SELECT CAST(val_data AS SIGNED) FROM INV21040 WHERE key_data = 'SECTION_CATEGORY_ID' LIMIT 1)
+                        AND CAST(sm.sales_date AS DATE) = CURDATE()
+                  )
+                  OR EXISTS (
+                      -- Transfer: inv31065bsd/66bsd path
+                      SELECT 1 FROM INV31065BS bs
+                      JOIN INV31065bsd sm ON bs.sales_mast_id = sm.sales_mast_id
+                      JOIN INV31066bsd sd ON sd.sales_mast_id = sm.sales_mast_id
+                      JOIN INV21050 s ON s.stock_mast_id = sd.stock_mast_id
+                      JOIN INV21013 pc ON pc.itm_mast_id = s.itm_mast_id
+                      WHERE bs.trip_no = t.id
+                        AND IFNULL(bs.is_for_transfer, 0) = 1
+                        AND pc.prdt_cat_val_id = @SecId
+                        AND pc.prdt_cat_id = (SELECT CAST(val_data AS SIGNED) FROM INV21040 WHERE key_data = 'SECTION_CATEGORY_ID' LIMIT 1)
+                        AND CAST(sm.sales_date AS DATE) = CURDATE()
+                  )
+                  ORDER BY t.trip_seq ASC;",
                 new { SecId }, cancellationToken: cancellationToken));
             TripsList = rows.ToList();
             return TripsList;
@@ -769,7 +817,14 @@ public sealed class MySqlOrderRepository : IOrderRepository
                            CAST(bsm.bill_no AS CHAR)
                         ) AS BillNoStr,
                 un.no_of_decimal AS UnitDecml,
-                CASE WHEN pos.stock_mast_id IS NOT NULL THEN 'true' ELSE 'false' END AS IsPosCompleted
+                CASE 
+                        WHEN EXISTS (
+                                     SELECT 1 FROM INV31065BSPOSHis pos
+                                     WHERE pos.stock_mast_id = s.stock_mast_id 
+                                       AND pos.trip_no = bs.trip_no
+                                 ) THEN 'true' 
+                        ELSE 'false' 
+                END AS IsPosCompleted
             FROM INV31065BS bs
             JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
             JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
@@ -809,7 +864,14 @@ public sealed class MySqlOrderRepository : IOrderRepository
                            CAST(sm.bill_no AS CHAR)
                         ) AS BillNoStr,
                 un.no_of_decimal AS UnitDecml,
-                CASE WHEN pos2.stock_mast_id IS NOT NULL THEN 'true' ELSE 'false' END AS IsPosCompleted
+                CASE 
+                        WHEN EXISTS (
+                                     SELECT 1 FROM INV31065BSPOSHis pos2
+                                     WHERE pos2.stock_mast_id = s.stock_mast_id 
+                                       AND pos2.trip_no = bs.trip_no
+                                 ) THEN 'true' 
+                        ELSE 'false' 
+                END AS IsPosCompleted
             FROM INV31065BS bs
             JOIN INV31065 sm     ON bs.sales_mast_id = sm.sales_mast_id
             JOIN INV31066 sd     ON sd.sales_mast_id = sm.sales_mast_id
@@ -824,8 +886,6 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                                         WHERE key_data = 'SECTION_CATEGORY_ID'
                                                         LIMIT 1
                                                     )
-            LEFT  JOIN INV31065BSPOSHis pos2 ON pos2.stock_mast_id = s.stock_mast_id
-                                             AND pos2.trip_no = bs.trip_no
             WHERE CAST(sm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 0
               AND bs.trip_no         = @tripId
@@ -961,11 +1021,11 @@ public sealed class MySqlOrderRepository : IOrderRepository
             {
                 // (A) DIFF FILTER — skip rows whose qty is unchanged from the
                 // snapshot taken at modal-open. No DB work needed.
-                if (d.Qty is decimal newQty && newQty == d.OriginalQty)
-                {
-                    skipped++;
-                    continue;
-                }
+                // if (d.Qty is decimal newQty && newQty == d.OriginalQty)
+                // {
+                //     skipped++;
+                //     continue;
+                // }
 
                 // (B) BS LOOKUP — each pur_sale_id is the stable identity; the BS
                 // row points at the master and tells us sale vs. transfer.

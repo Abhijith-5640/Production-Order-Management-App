@@ -54,7 +54,7 @@ const DetailModal = ({ isOpen, activeItem,currentSection, currentTrip, onClose, 
                                     <Minus className="w-4 h-4" />
                                 </button>
                                 {/* <span className="w-8 text-center font-bold text-slate-800 text-lg">{dist.qty}</span> */}
-                                <QtyInput dist={dist} unitDecml={dist.unitDecml} onQtyChange={(dist, newQty) => onUpdateQty(idx, newQty - dist.qty)} />
+                                <QtyInput dist={dist} unitDecml={activeItem.unitDecml} onQtyChange={(dist, newQty) => onUpdateQty(idx, newQty - dist.qty)} />
                                 
                                 <button
                                     onClick={() => onUpdateQty(idx, 1)}
