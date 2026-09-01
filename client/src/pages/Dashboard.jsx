@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { Factory, LogOut, Layers, Truck, ChevronDown, Check, PackageSearch, Ban, ClipboardList, AlertTriangle } from 'lucide-react';
 
-import { api, authStore } from '../services/api';
+import { api, authStore, NO_SECTION_ID } from '../services/api';
 import FullScreenLoader from '../components/FullScreenLoader';
 import PickerModal from '../components/PickerModal';
 import DetailModal from '../components/DetailModal';
@@ -554,7 +554,10 @@ const Dashboard = () => {
                     </div>
                     <div>
                         <h1 className="font-bold text-base leading-tight">Nexus Prod</h1>
-                        <p className="text-[9px] text-indigo-600 font-bold uppercase tracking-widest">
+                        <p className="text-[9px] text-indigo-600 font-bold uppercase tracking-widest flex items-center gap-1">
+                            {currentSection?.id === NO_SECTION_ID && (
+                                <AlertTriangle className="w-3 h-3 text-amber-500" />
+                            )}
                             {currentSection?.name || 'Active Section'}
                         </p>
                     </div>
@@ -571,12 +574,24 @@ const Dashboard = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
                     <button
                         onClick={openSectionPicker}
-                        className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-between touch-active text-left w-full h-full min-h-[5rem]">
+                        className={`bg-white p-4 rounded-2xl shadow-sm border flex items-center justify-between touch-active text-left w-full h-full min-h-[5rem] transition-all ${
+                            currentSection?.id === NO_SECTION_ID
+                                ? 'border-amber-300 bg-amber-50'
+                                : 'border-slate-200'
+                        }`}>
                         <div className="flex items-center gap-3">
-                            <div className="text-purple-600"><Layers className="w-5 h-5" /></div>
+                            <div className={`${currentSection?.id === NO_SECTION_ID ? 'text-amber-500' : 'text-purple-600'}`}>
+                                {currentSection?.id === NO_SECTION_ID ? (
+                                    <AlertTriangle className="w-5 h-5" />
+                                ) : (
+                                    <Layers className="w-5 h-5" />
+                                )}
+                            </div>
                             <div>
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Step 1</p>
-                                <p className="font-bold text-slate-700 leading-tight">{currentSection?.name || 'Select Section'}</p>
+                                <p className={`font-bold leading-tight ${currentSection?.id === NO_SECTION_ID ? 'text-amber-700' : 'text-slate-700'}`}>
+                                    {currentSection?.name || 'Select Section'}
+                                </p>
                             </div>
                         </div>
                         <ChevronDown className="text-slate-300 w-4 h-4" />

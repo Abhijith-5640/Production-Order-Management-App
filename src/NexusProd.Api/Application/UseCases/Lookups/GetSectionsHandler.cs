@@ -24,7 +24,18 @@ public sealed class GetSectionsHandler : IHandler<GetSectionsQuery, GetSectionsR
         try
         {
             var lookup = await _orders.GetSectionsAsync(cancellationToken);
-            return new GetSectionsResult(lookup.CategoryId, lookup.Sections);
+            var sections = lookup.Sections.ToList();
+
+            // Check if there are uncategorized items with active orders
+            var hasUncategorizedItems = await _orders.HasUncategorizedOrdersAsync(cancellationToken);
+
+            if (hasUncategorizedItems)
+            {
+                // Prepend "No Section" as the first entry with a virtual ID of -1
+                sections.Insert(0, new SectionDto(SectionDto.NoSectionId, "No Section"));
+            }
+
+            return new GetSectionsResult(lookup.CategoryId, sections);
         }
         catch (Exception ex)
         {

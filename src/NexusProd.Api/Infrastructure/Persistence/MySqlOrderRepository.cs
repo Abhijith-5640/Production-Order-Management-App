@@ -499,7 +499,9 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 // (replaces the four separate aggregation round trips the
                 // original port used).
                 await conn.ExecuteAsync(new CommandDefinition(
-                    $@"UPDATE {detailTbl} d
+                    $@" SET SQL_SAFE_UPDATES = 0;
+                        
+                        UPDATE {detailTbl} d
                         JOIN   inv21050 s  ON s.stock_mast_id = d.stock_mast_id
                         JOIN   inv21010 i  ON i.itm_mast_id   = s.itm_mast_id
                         JOIN   inv21001 t  ON t.tax_id        = i.tax_id
@@ -552,7 +554,9 @@ public sealed class MySqlOrderRepository : IOrderRepository
 				                				d.tax_amt - (d.tax_amt - (IFNULL(d.cgst_amt,0) + IFNULL(d.sgst_amt,0)))
 				                			ELSE d.tax_amt
 				                		END
-                        WHERE  d.sales_mast_id = @sm;",
+                        WHERE  d.sales_mast_id = @sm;
+                        
+                        SET SQL_SAFE_UPDATES = 1;",
                     new
                     {
                         isExclusive,
@@ -730,10 +734,70 @@ public sealed class MySqlOrderRepository : IOrderRepository
         }
     }
 
+    public async Task<bool> HasUncategorizedOrdersAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var conn = await _factory.OpenAsync(cancellationToken);
+
+            // Check for items in INV31065BS that don't have a matching INV21013 record
+            // (i.e., items without a valid section assignment for today)
+            const string sql = @"
+                SELECT EXISTS(
+                    SELECT 1 FROM INV31065BS bs
+                    JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
+                    JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
+                    JOIN INV21050 s ON s.stock_mast_id = bsd.stock_mast_id
+                    JOIN INV21010 i ON i.itm_mast_id = s.itm_mast_id
+                    LEFT JOIN INV21013 pc ON pc.itm_mast_id = i.itm_mast_id
+                        AND pc.prdt_cat_id = (
+                            SELECT CAST(val_data AS SIGNED)
+                            FROM INV21040
+                            WHERE key_data = 'SECTION_CATEGORY_ID'
+                            LIMIT 1
+                        )
+                    WHERE CAST(bsm.sales_date AS DATE) = CURDATE()
+                        AND IFNULL(bs.is_for_transfer, 0) = 1
+                        AND pc.prdt_cat_val_id IS NULL
+                )
+                OR EXISTS(
+                    SELECT 1 FROM INV31065BS bs
+                    JOIN INV31065 sm ON bs.sales_mast_id = sm.sales_mast_id
+                    JOIN INV31066 sd ON sd.sales_mast_id = sm.sales_mast_id
+                    JOIN INV21050 s ON s.stock_mast_id = sd.stock_mast_id
+                    JOIN INV21010 i ON i.itm_mast_id = s.itm_mast_id
+                    LEFT JOIN INV21013 pc ON pc.itm_mast_id = i.itm_mast_id
+                        AND pc.prdt_cat_id = (
+                            SELECT CAST(val_data AS SIGNED)
+                            FROM INV21040
+                            WHERE key_data = 'SECTION_CATEGORY_ID'
+                            LIMIT 1
+                        )
+                    WHERE CAST(sm.sales_date AS DATE) = CURDATE()
+                        AND IFNULL(bs.is_for_transfer, 0) = 0
+                        AND pc.prdt_cat_val_id IS NULL
+                ) AS HasUncategorized";
+
+            var result = await conn.QueryFirstAsync<bool>(new CommandDefinition(sql, cancellationToken: cancellationToken));
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "HasUncategorizedOrdersAsync failed");
+            throw;
+        }
+    }
+
     public async Task<IReadOnlyList<TripsM>> GetTripsAsync(int SecId, CancellationToken cancellationToken)
     {
         try
         {
+            // Handle "No Section" case - return trips for items without a section assignment
+            if (SecId == SectionDto.NoSectionId)
+            {
+                return await GetTripsForUncategorizedAsync(cancellationToken);
+            }
+
             var TripsList = new List<TripsM>();
             await using var conn = await _factory.OpenAsync(cancellationToken);
             var rows = await conn.QueryAsync<TripsM>(new CommandDefinition(
@@ -782,6 +846,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
     {
         try
         {
+            // Handle "No Section" case - return orders for items without a section assignment
+            if (sectionId == SectionDto.NoSectionId)
+            {
+                return await GetOrdersForUncategorizedAsync(tripId, cancellationToken);
+            }
+
             const string sql = @"
         SELECT 
             u.ItemId,
@@ -1915,5 +1985,281 @@ public sealed class MySqlOrderRepository : IOrderRepository
         public int TripSeq { get; set; }
         public int? PurTmpltId { get; set; }
         public int? PurBrnchId { get; set; }
+    }
+
+    /// <summary>
+    /// Returns trips for items that do NOT have a section assignment (pc.prdt_cat_val_id IS NULL).
+    /// Used when the "No Section" virtual category is selected.
+    /// </summary>
+    private async Task<IReadOnlyList<TripsM>> GetTripsForUncategorizedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var conn = await _factory.OpenAsync(cancellationToken);
+
+            const string sql = @"
+                SELECT DISTINCT t.id AS Id,
+                         t.trip AS Trip
+                  FROM Trip t
+                  WHERE EXISTS (
+                      -- Transfer path: inv31065bs/bsd/bsd
+                      SELECT 1 FROM INV31065BS bs
+                      JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
+                      JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
+                      JOIN INV21050 s ON s.stock_mast_id = bsd.stock_mast_id
+                      JOIN INV21010 i ON i.itm_mast_id = s.itm_mast_id
+                      LEFT JOIN INV21013 pc ON pc.itm_mast_id = i.itm_mast_id
+                          AND pc.prdt_cat_id = (
+                              SELECT CAST(val_data AS SIGNED)
+                              FROM INV21040
+                              WHERE key_data = 'SECTION_CATEGORY_ID'
+                              LIMIT 1
+                          )
+                      WHERE bs.trip_no = t.id
+                        AND IFNULL(bs.is_for_transfer, 0) = 1
+                        AND pc.prdt_cat_val_id IS NULL
+                        AND CAST(bsm.sales_date AS DATE) = CURDATE()
+                  )
+                  OR EXISTS (
+                      -- Sale path: inv31065/66
+                      SELECT 1 FROM INV31065BS bs
+                      JOIN INV31065 sm ON bs.sales_mast_id = sm.sales_mast_id
+                      JOIN INV31066 sd ON sd.sales_mast_id = sm.sales_mast_id
+                      JOIN INV21050 s ON s.stock_mast_id = sd.stock_mast_id
+                      JOIN INV21010 i ON i.itm_mast_id = s.itm_mast_id
+                      LEFT JOIN INV21013 pc ON pc.itm_mast_id = i.itm_mast_id
+                          AND pc.prdt_cat_id = (
+                              SELECT CAST(val_data AS SIGNED)
+                              FROM INV21040
+                              WHERE key_data = 'SECTION_CATEGORY_ID'
+                              LIMIT 1
+                          )
+                      WHERE bs.trip_no = t.id
+                        AND IFNULL(bs.is_for_transfer, 0) = 0
+                        AND pc.prdt_cat_val_id IS NULL
+                        AND CAST(sm.sales_date AS DATE) = CURDATE()
+                  )
+                  ORDER BY t.trip_seq ASC";
+
+            var rows = await conn.QueryAsync<TripsM>(new CommandDefinition(sql, cancellationToken: cancellationToken));
+            return rows.ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetTripsForUncategorizedAsync failed");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Returns orders for items that do NOT have a section assignment (pc.prdt_cat_val_id IS NULL).
+    /// Used when the "No Section" virtual category is selected.
+    /// Mirrors the structure of GetOrdersAsync but filters for IS NULL instead of = @sectionId.
+    /// </summary>
+    private async Task<IReadOnlyList<OrderItem>> GetOrdersForUncategorizedAsync(int tripId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var conn = await _factory.OpenAsync(cancellationToken);
+
+            const string sql = @"
+        SELECT
+            u.ItemId,
+            u.`Name`,
+            u.StockMastId,
+            SUM(u.Qty) OVER (PARTITION BY u.StockMastId) AS TotalQty,
+            u.Qty,
+            u.Branch,
+            u.BillId AS PurSaleId,
+            u.Trip  AS TripId,
+            u.BrnchId,
+            u.PurTmpltId,
+            t.trip AS TripName,
+            t.trip_seq AS TripSequence,
+            u.UnitName,
+            u.BillNoStr,
+            u.UnitDecml,
+            u.IsPosCompleted
+        FROM (
+            SELECT
+                i.itm_mast_id    AS ItemId,
+                i.itm_mast_name  AS `Name`,
+                s.stock_mast_id  AS StockMastId,
+                bsd.sales_qty    AS Qty,
+                b.brnch_nam      AS Branch,
+                bs.pur_sale_id   AS BillId,
+                bs.trip_no       AS Trip,
+                bs.pur_brnch_id AS BrnchId,
+                bs.pur_template_id AS PurTmpltId,
+                un.symbol    AS UnitName,
+                CONCAT_WS(NULLIF(bsm.delim, '-'),
+                           NULLIF(bsm.bill_prfx, ''),
+                           CAST(bsm.bill_no AS CHAR)
+                        ) AS BillNoStr,
+                un.no_of_decimal AS UnitDecml,
+                CASE
+                        WHEN EXISTS (
+                                     SELECT 1 FROM INV31065BSPOSHis pos
+                                     WHERE pos.stock_mast_id = s.stock_mast_id
+                                       AND pos.trip_no = bs.trip_no
+                                 ) THEN 'true'
+                        ELSE 'false'
+                END AS IsPosCompleted
+            FROM INV31065BS bs
+            JOIN INV31065bsd bsm ON bs.sales_mast_id = bsm.sales_mast_id
+            JOIN INV31066bsd bsd ON bsd.sales_mast_id = bsm.sales_mast_id
+            JOIN INV21050 s      ON s.stock_mast_id = bsd.stock_mast_id
+            JOIN INV21010 i      ON s.itm_mast_id = i.itm_mast_id
+            JOIN INV00000 un      ON i.unit_id = un.unit_id
+            JOIN CTGE1165pur b   ON bs.pur_brnch_id = b.brnch_id
+            LEFT JOIN INV21013 pc ON pc.itm_mast_id = i.itm_mast_id
+                                AND pc.prdt_cat_id = (
+                                                        SELECT CAST(val_data AS SIGNED)
+                                                        FROM INV21040
+                                                        WHERE key_data = 'SECTION_CATEGORY_ID'
+                                                        LIMIT 1
+                                                    )
+            LEFT  JOIN INV31065BSPOSHis pos ON pos.stock_mast_id = s.stock_mast_id
+                                            AND pos.trip_no = bs.trip_no
+            WHERE CAST(bsm.sales_date AS DATE) = CAST(NOW() AS DATE)
+              AND IFNULL(bs.is_for_transfer, 0) = 1
+              AND bs.trip_no         = @tripId
+              AND pc.prdt_cat_val_id IS NULL
+
+            UNION ALL
+
+            SELECT
+                i.itm_mast_id    AS ItemId,
+                i.itm_mast_name  AS `Name`,
+                s.stock_mast_id  AS StockMastId,
+                sd.sales_qty     AS Qty,
+                b.brnch_nam      AS Branch,
+                bs.pur_sale_id   AS BillId,
+                bs.trip_no       AS Trip,
+                bs.pur_brnch_id AS BrnchId,
+                bs.pur_template_id AS PurTmpltId,
+                un.symbol    AS UnitName,
+                CONCAT_WS(NULLIF(sm.delim, '-'),
+                           NULLIF(sm.bill_prfx, ''),
+                           CAST(sm.bill_no AS CHAR)
+                        ) AS BillNoStr,
+                un.no_of_decimal AS UnitDecml,
+                CASE
+                        WHEN EXISTS (
+                                     SELECT 1 FROM INV31065BSPOSHis pos
+                                     WHERE pos.stock_mast_id = s.stock_mast_id
+                                       AND pos.trip_no = bs.trip_no
+                                 ) THEN 'true'
+                        ELSE 'false'
+                END AS IsPosCompleted
+            FROM INV31065BS bs
+            JOIN INV31065 sm  ON bs.sales_mast_id = sm.sales_mast_id
+            JOIN INV31066 sd  ON sd.sales_mast_id = sm.sales_mast_id
+            JOIN INV21050 s   ON s.stock_mast_id = sd.stock_mast_id
+            JOIN INV21010 i   ON s.itm_mast_id = i.itm_mast_id
+            JOIN INV00000 un  ON i.unit_id = un.unit_id
+            JOIN CTGE1165pur b ON bs.pur_brnch_id = b.brnch_id
+            LEFT JOIN INV21013 pc ON pc.itm_mast_id = i.itm_mast_id
+                                AND pc.prdt_cat_id = (
+                                                        SELECT CAST(val_data AS SIGNED)
+                                                        FROM INV21040
+                                                        WHERE key_data = 'SECTION_CATEGORY_ID'
+                                                        LIMIT 1
+                                                    )
+            LEFT JOIN INV31065BSPOSHis pos ON pos.stock_mast_id = s.stock_mast_id
+                                           AND pos.trip_no = bs.trip_no
+            WHERE CAST(sm.sales_date AS DATE) = CAST(NOW() AS DATE)
+              AND IFNULL(bs.is_for_transfer, 0) = 0
+              AND bs.trip_no = @tripId
+              AND pc.prdt_cat_val_id IS NULL
+        ) u
+        JOIN Trip t ON u.Trip = t.id
+        ORDER BY u.StockMastId, u.BillId";
+
+            var rows = (await conn.QueryAsync<FlatRowItemM>(new CommandDefinition(
+                sql, new { tripId }, cancellationToken: cancellationToken))).ToList();
+
+            // Available trips per (pur_template_id, pur_brnch_id)
+            var branchPairKeys = rows
+                .Where(x => x.PurTmpltId != 0 && x.BrnchId != 0)
+                .Select(x => new { x.PurTmpltId, x.BrnchId })
+                .Distinct()
+                .ToList();
+
+            var allTripsLookup = new Dictionary<(int PurTmpltId, int PurBrnchId), List<Trip>>();
+            if (branchPairKeys.Count > 0)
+            {
+                var allTrips = (await conn.QueryAsync<TripBranchRow>(new CommandDefinition(
+                    @"SELECT DISTINCT t.id, t.trip, t.trip_seq, bs.pur_template_id, bs.pur_brnch_id
+                      FROM Trip t JOIN inv31065bs bs ON bs.trip_no = t.id
+                      WHERE bs.pur_template_id IN @purTmpltIds AND bs.pur_brnch_id IN @purBrnchIds
+                        AND IFNULL(bs.is_finalized, 0) = 0
+                        AND CAST(bs.createdDt AS DATE) = CAST(NOW() AS DATE)
+                      ORDER BY t.trip_seq ASC",
+                    new
+                    {
+                        purTmpltIds = branchPairKeys.Select(k => k.PurTmpltId).Distinct().ToList(),
+                        purBrnchIds = branchPairKeys.Select(k => k.BrnchId).Distinct().ToList(),
+                    }, cancellationToken: cancellationToken))).ToList();
+
+                foreach (var t in allTrips)
+                {
+                    if (!t.PurTmpltId.HasValue || !t.PurBrnchId.HasValue) continue;
+                    var key = (t.PurTmpltId.Value, t.PurBrnchId.Value);
+                    if (!allTripsLookup.TryGetValue(key, out var list)) list = new List<Trip>();
+                    list.Add(new Trip { Id = t.Id, Name = t.Name, TripSeq = t.TripSeq });
+                    allTripsLookup[key] = list;
+                }
+            }
+
+            var tripsByTemplate = new Dictionary<int, List<Trip>>();
+            foreach (var key in branchPairKeys)
+            {
+                allTripsLookup.TryGetValue((key.PurTmpltId, key.BrnchId), out var trips);
+                tripsByTemplate[key.PurTmpltId] = trips ?? new List<Trip>();
+            }
+
+            var byItem = new Dictionary<int, OrderItem>();
+            foreach (var row in rows)
+            {
+                if (!byItem.TryGetValue(row.StockMastId, out var item))
+                {
+                    item = new OrderItem
+                    {
+                        Id = row.ItemId,
+                        Name = row.Name,
+                        StockMastId = row.StockMastId,
+                        TotalQty = row.TotalQty,
+                        Unit = row.UnitName,
+                        UnitDecml = row.UnitDecml,
+                        IsCompleted = (row.IsPosCompleted == "true"),
+                        Distribution = new List<DistributionEntry>()
+                    };
+                    byItem[row.StockMastId] = item;
+                }
+
+                tripsByTemplate.TryGetValue(row.PurTmpltId, out var availableTrips);
+                var laterTrips = (availableTrips ?? new List<Trip>())
+                    .Where(t => t.TripSeq > row.TripSequence).ToList();
+
+                item.Distribution.Add(new DistributionEntry
+                {
+                    Branch = row.Branch,
+                    PurSaleId = row.PurSaleId,
+                    Trip = row.TripId,
+                    Qty = Convert.ToDecimal(row.Qty),
+                    BrnchId = row.BrnchId,
+                    AvailableTrips = laterTrips,
+                    BillNoStr = row.BillNoStr
+                });
+            }
+
+            return byItem.Values.OrderBy(x => x.IsCompleted).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetOrdersForUncategorizedAsync failed for tripId {TripId}", tripId);
+            throw;
+        }
     }
 }

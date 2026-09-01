@@ -21,7 +21,7 @@ public sealed class GetOrdersHandler : IHandler<GetOrdersQuery, GetOrdersResult>
 
     public async Task<Result<GetOrdersResult>> HandleAsync(GetOrdersQuery request, CancellationToken cancellationToken)
     {
-        if (request.SectionId <= 0 || request.TripId <= 0)
+        if (request.SectionId == 0 || request.TripId <= 0)
             return Error.InvalidInput("section and trip are required");
 
         try

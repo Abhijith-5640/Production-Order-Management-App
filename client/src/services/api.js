@@ -19,6 +19,9 @@
 //    the user back to /login.
 const DEV_API_BASE_URL = 'http://localhost:8443/api';
 
+// Virtual section ID for items without a valid section assignment
+export const NO_SECTION_ID = -1;
+
 // Change this to a dynamic getter function
 export const getApiBaseUrl = () => {
   return import.meta.env.DEV 

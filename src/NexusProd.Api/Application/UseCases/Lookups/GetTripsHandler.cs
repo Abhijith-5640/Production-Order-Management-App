@@ -21,7 +21,7 @@ public sealed class GetTripsHandler : IHandler<GetTripsQuery, GetTripsResult>
 
     public async Task<Result<GetTripsResult>> HandleAsync(GetTripsQuery request, CancellationToken cancellationToken)
     {
-        if (request.SectionId <= 0)
+        if (request.SectionId == 0)
             return Error.InvalidInput("section is required");
 
         try

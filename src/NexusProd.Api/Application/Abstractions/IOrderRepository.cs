@@ -37,6 +37,12 @@ public interface IOrderRepository
     Task<SectionsLookup> GetSectionsAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Checks if there are any active orders for items that do not have a valid section assignment.
+    /// Returns true if uncategorized items exist in INV31065BS for today.
+    /// </summary>
+    Task<bool> HasUncategorizedOrdersAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Distinct trip names from <c>sales_master</c> joined to items in the
     /// given section. Same query as the Express version.
     /// </summary>

@@ -26,7 +26,7 @@ public sealed class ExcludeItemHandler : IHandler<ExcludeItemCommand, string>
 
     public async Task<Result<string>> HandleAsync(ExcludeItemCommand request, CancellationToken cancellationToken)
     {
-        if (request.SectionId <= 0 || request.ItemId <= 0 || request.CurrentTrip <= 0 || request.StockMastId <= 0 || request.UsrId <= 0)
+        if (request.SectionId == 0 || request.ItemId <= 0 || request.CurrentTrip <= 0 || request.StockMastId <= 0 || request.UsrId <= 0)
             return Error.InvalidInput("section, itemId, currentTrip, stockMastId, and usrId are required for exclusion");
 
         if (request.Entries is null || request.Entries.Count == 0)
