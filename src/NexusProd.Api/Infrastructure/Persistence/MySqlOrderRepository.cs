@@ -50,6 +50,69 @@ public sealed class MySqlOrderRepository : IOrderRepository
         }
     }
 
+    public async Task<TariffViolationResponse> GetTariffViolationsAsync(int brnchId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+            SELECT
+                b.brnch_nam    AS BranchName,
+                o.brnch_id     AS BranchId,
+                i.itm_mast_id  AS ItemId,
+                i.itm_mast_code     AS ItemCode,
+                i.itm_mast_name AS ItemName,
+                un.symbol      AS Unit,
+                SUM(o.qty)     AS Qty
+            FROM INV21085 o
+            JOIN CTGE1165pur b ON o.brnch_id = b.brnch_id
+            JOIN INV21010 i ON o.itm_mast_id = i.itm_mast_id
+            JOIN INV21050 s ON s.itm_mast_id = i.itm_mast_id
+            JOIN INV00000 un ON i.unit_id = un.unit_id
+            -- Get tariff via template matching
+            JOIN INV21100 tpl ON tpl.purchase_brnch_id = o.brnch_id
+                            AND tpl.selling_brnch_id = @brnchId
+            JOIN inv21075 ts ON ts.ledger_id = tpl.selling_ledger_id
+							 AND ts.brnch_id = @brnchId
+            -- Items NOT in tariff for this purchase branch
+            LEFT JOIN inv21071 tf ON tf.tariff_id = ts.tariff_id
+							 AND tf.stock_mast_id = s.stock_mast_id
+                             AND tf.base_rate = s.mrp
+                             AND tf.stat = 1
+            WHERE o.stats IN ('D','O')
+              AND IFNULL(o.is_billed,  0) = 0
+              AND IFNULL(o.is_exclude, 0) = 0
+              AND CAST(o.dt AS DATE) = CASE o.stats
+                                         WHEN 'D' THEN CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
+                                         ELSE CAST(NOW() AS DATE)
+                                       END
+              AND tf.tariff_id IS NULL
+            GROUP BY b.brnch_nam, o.brnch_id, i.itm_mast_id, i.itm_mast_code, i.itm_mast_name, un.symbol
+            ORDER BY b.brnch_nam, i.itm_mast_name";
+
+        await using var conn = await _factory.OpenAsync(cancellationToken);
+        var rows = await conn.QueryAsync<dynamic>(new CommandDefinition(
+            sql, new { brnchId }, cancellationToken: cancellationToken));
+
+        var grouped = rows
+            .GroupBy(r => new { r.BranchName, r.BranchId })
+            .Select(g => new TariffViolationBranch(
+                g.Key.BranchName,
+                g.Key.BranchId,
+                g.Select(r => new TariffViolationItem(
+                    (int)r.ItemId,
+                    (string)r.ItemCode,
+                    (string)r.ItemName,
+                    (string)r.Unit,
+                    (decimal)r.Qty
+                )).ToList() as IReadOnlyList<TariffViolationItem>
+            )).ToList();
+
+        return new TariffViolationResponse(
+            HasViolations: grouped.Count > 0,
+            TotalItems: grouped.Sum(b => b.Items.Count),
+            TotalBranches: grouped.Count,
+            Branches: grouped
+        );
+    }
+
     public async Task<int> GenerateInvoicesAsync(int userId, int brnchId, int userCounterId, CancellationToken cancellationToken)
     {
         // (0) precheck — short-circuit when the source set is empty so the

@@ -59,3 +59,22 @@ public sealed record ExcludeRequest(
     int UsrId);
 
 public sealed record ExcludeResponse(bool Success, string Message);
+
+// Tariff violation response records
+public sealed record TariffViolationItem(
+    int ItemId,
+    string ItemCode,
+    string ItemName,
+    string Unit,
+    decimal Qty);
+
+public sealed record TariffViolationBranch(
+    string BranchName,
+    int BranchId,
+    IReadOnlyList<TariffViolationItem> Items);
+
+public sealed record TariffViolationResponse(
+    bool HasViolations,
+    int TotalItems,
+    int TotalBranches,
+    IReadOnlyList<TariffViolationBranch> Branches);

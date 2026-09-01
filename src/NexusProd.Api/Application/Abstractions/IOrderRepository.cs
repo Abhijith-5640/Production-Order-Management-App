@@ -58,6 +58,12 @@ public interface IOrderRepository
     Task<IReadOnlyList<OrderItem>> GetOrdersAsync(int sectionId, int tripId, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Checks for items in pending orders that are not in the purchasing branch's tariff.
+    /// Returns grouped violations by branch.
+    /// </summary>
+    Task<TariffViolationResponse> GetTariffViolationsAsync(int brnchId, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Cascade update rooted at each distribution row's <c>pur_sale_id</c>:
     /// looks up the master via <c>INV31065BS</c> (sale vs. transfer),
     /// ratio-scales the matching detail row in <c>INV31066</c> /

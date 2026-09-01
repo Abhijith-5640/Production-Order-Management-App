@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using NexusProd.Api.Api.Contracts;
 using NexusProd.Api.Application.Common;
 using NexusProd.Api.Application.UseCases.Auth;
 using NexusProd.Api.Application.UseCases.Config;
@@ -24,6 +25,7 @@ public static class DependencyInjection
         // Orders
         services.AddScoped<IHandler<CheckPendingQuery, CheckPendingResult>, CheckPendingHandler>();
         services.AddScoped<IHandler<GenerateInvoicesCommand, GenerateInvoicesResult>, GenerateInvoicesHandler>();
+        services.AddScoped<IHandler<GetTariffViolationsQuery, TariffViolationResponse>, GetTariffViolationsHandler>();
         services.AddScoped<IHandler<GetOrdersQuery, GetOrdersResult>, GetOrdersHandler>();
         services.AddScoped<IHandler<UpdateInvoiceCommand, string>, UpdateInvoiceHandler>();
         services.AddScoped<IHandler<ExcludeItemCommand, string>, ExcludeItemHandler>();

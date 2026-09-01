@@ -249,6 +249,9 @@ export const api = {
     checkPendingOrders: (BrnchId) =>
         request(`/orders/check-pending?brnchId=${encodeURIComponent(BrnchId)}`),
 
+    getTariffViolations: (BrnchId) =>
+        request(`/orders/tariff-violations?brnchId=${encodeURIComponent(BrnchId)}`),
+
     generateInvoices: (userId, brnchId, userCounterId) => request('/orders/generate', {
         method: 'POST',
         body: JSON.stringify({ userId, brnchId, userCounterId }),

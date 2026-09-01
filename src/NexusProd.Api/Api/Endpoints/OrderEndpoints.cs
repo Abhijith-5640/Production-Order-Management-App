@@ -18,6 +18,12 @@ public static class OrderEndpoints
             return r.ToHttp(p => Results.Ok(new CheckPendingResponse(p.PendingExist)));
         });
 
+        group.MapGet("/tariff-violations", async (int? brnchId, IHandler<GetTariffViolationsQuery, TariffViolationResponse> h, CancellationToken ct) =>
+        {
+            var r = await h.HandleAsync(new GetTariffViolationsQuery(brnchId ?? 0), ct);
+            return r.ToHttp(v => Results.Ok(v));
+        });
+
         group.MapPost("/generate", async (GenerateInvoicesRequest req, IHandler<GenerateInvoicesCommand, GenerateInvoicesResult> h, CancellationToken ct) =>
         {
             var r = await h.HandleAsync(new GenerateInvoicesCommand(req.UserId, req.BrnchId, req.UserCounterId), ct);

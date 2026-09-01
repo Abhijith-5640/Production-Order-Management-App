@@ -8,6 +8,7 @@ import FullScreenLoader from '../components/FullScreenLoader';
 import PickerModal from '../components/PickerModal';
 import DetailModal from '../components/DetailModal';
 import AdjustmentModal from '../components/AdjustmentModal';
+import TariffViolationModal from '../components/TariffViolationModal';
 
 const Dashboard = () => {
     const navigate = useNavigate();
@@ -35,6 +36,7 @@ const Dashboard = () => {
 
     // Add initial loading logic similar to confirming action in old code
     const [showConfirm, setShowConfirm] = useState(false);
+    const [tariffViolations, setTariffViolations] = useState(null);
 
     // Computed data
     const hasSelection = currentSection && currentTrip;
@@ -60,9 +62,15 @@ const Dashboard = () => {
         try {
             const UserBrnchId = parseInt(localStorage.getItem('nexus_user_brnch_id') ?? '0', 10) || 0;
             const { pendingExist } = await api.checkPendingOrders(UserBrnchId);
-            setShowConfirm(pendingExist);
-            if(!pendingExist) 
-            {
+
+            if (pendingExist) {
+                // Check for tariff violations
+                const violations = await api.getTariffViolations(UserBrnchId);
+                setTariffViolations(violations);
+                setShowConfirm(true);
+            } else {
+                setShowConfirm(false);
+                setTariffViolations(null);
                 fetchSections();
             }
         } catch (error) {
@@ -75,6 +83,20 @@ const Dashboard = () => {
     // while the user decides.
     const handleDismissPending = () => {
         setShowConfirm(false);
+        setTariffViolations(null);
+        fetchSections();
+    };
+
+    // Handlers for tariff violation modal
+    const handleTariffViolationConfirm = async () => {
+        setShowConfirm(false);
+        setTariffViolations(null);
+        await handleGenerateInvoices();
+    };
+
+    const handleTariffViolationCancel = () => {
+        setShowConfirm(false);
+        setTariffViolations(null);
         fetchSections();
     };
 
@@ -482,8 +504,16 @@ const Dashboard = () => {
         <>
             <FullScreenLoader isVisible={loading.state} text={loading.text} />
 
+            {/* Tariff Violation Modal */}
+            <TariffViolationModal
+                isOpen={showConfirm && !!tariffViolations?.hasViolations}
+                violations={tariffViolations}
+                onConfirm={handleTariffViolationConfirm}
+                onCancel={handleTariffViolationCancel}
+            />
+
             {/* Initialize Modal */}
-            {showConfirm && (
+            {showConfirm && !tariffViolations?.hasViolations && (
                 <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"></div>
                     <div className="relative bg-white w-full max-w-sm rounded-[2rem] shadow-2xl p-8 text-center animate-in zoom-in duration-150 border border-slate-100">
