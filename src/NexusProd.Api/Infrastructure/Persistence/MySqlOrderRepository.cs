@@ -35,7 +35,9 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 JOIN   INV21100 bt ON od.brnch_id = bt.purchase_brnch_id
                 WHERE  bt.selling_brnch_id      = @brnchId
                   AND  bt.is_automatic          = 1
-                  AND  CAST(od.dt AS DATE)      = CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
+                  AND  CAST(od.dt AS DATE) = CASE stats
+                                                WHEN 'D' THEN CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
+                                                ELSE CAST(NOW() AS DATE)
                   AND  IFNULL(od.is_billed,  0) = 0
                   AND  IFNULL(od.is_exclude, 0) = 0
                   AND  od.qty                   > 0";
