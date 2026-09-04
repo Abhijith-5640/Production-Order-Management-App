@@ -332,16 +332,16 @@ Write-Host "NexusProd has been uninstalled completely."
 
 ### What Gets Removed
 
-| Item | Location | Removed |
-|------|----------|---------|
-| Launcher executable | `C:\Works\POS\NexusProd\NexusProd.exe` | Yes |
-| API executable | `C:\Works\POS\NexusProd\NexusProd.Api.exe` | Yes |
-| Application logs | `C:\Works\POS\NexusProd\logs\` | Yes |
-| Configuration files | `C:\Works\POS\NexusProd\appsettings.json` | Yes |
-| Database config | `C:\Works\POS\NexusProd\db_config.json` | Yes |
-| React SPA | `C:\Works\POS\NexusProd\wwwroot\` | Yes |
-| Registry autostart | `HKCU:\...\Run\NexusProd` | Yes |
-| Processes | Running instances | Yes |
+| Item                | Location                                   | Removed |
+| ------------------- | ------------------------------------------ | ------- |
+| Launcher executable | `C:\Works\POS\NexusProd\NexusProd.exe`     | Yes     |
+| API executable      | `C:\Works\POS\NexusProd\NexusProd.Api.exe` | Yes     |
+| Application logs    | `C:\Works\POS\NexusProd\logs\`             | Yes     |
+| Configuration files | `C:\Works\POS\NexusProd\appsettings.json`  | Yes     |
+| Database config     | `C:\Works\POS\NexusProd\db_config.json`    | Yes     |
+| React SPA           | `C:\Works\POS\NexusProd\wwwroot\`          | Yes     |
+| Registry autostart  | `HKCU:\...\Run\NexusProd`                  | Yes     |
+| Processes           | Running instances                          | Yes     |
 
 ### Before Uninstalling - Backup Data (Optional)
 
@@ -504,11 +504,11 @@ Edit `appsettings.json`:
 
 ### Update Log Locations
 
-| Log File | Purpose |
-|----------|---------|
-| `logs/launcher.log` | Launcher activity, restart events |
-| `logs/api.log` | API stdout with `[API]` prefix |
-| `logs/api.log.old` | Previous API log (auto-rolled at 10MB) |
+| Log File            | Purpose                                |
+| ------------------- | -------------------------------------- |
+| `logs/launcher.log` | Launcher activity, restart events      |
+| `logs/api.log`      | API stdout with `[API]` prefix         |
+| `logs/api.log.old`  | Previous API log (auto-rolled at 10MB) |
 
 ### Monitor Update Progress
 
@@ -546,45 +546,45 @@ Get-Content "C:\Works\POS\NexusProd\logs\launcher.log" -Wait
 
 ### 2. Launcher vs Windows Service
 
-| Feature | Old (WinSW) | New (Launcher) |
-| :--- | :--- | :--- |
-| Auto-start | Windows Service | Registry Run key |
-| Process management | Service controls | Child process monitor |
-| Update mechanism | Task Scheduler task | Direct file replacement |
-| Admin privileges | Required | **Not required** |
-| Logs | Service logs | `logs/launcher.log`, `logs/api.log` |
+| Feature            | Old (WinSW)         | New (Launcher)                      |
+| :----------------- | :------------------ | :---------------------------------- |
+| Auto-start         | Windows Service     | Registry Run key                    |
+| Process management | Service controls    | Child process monitor               |
+| Update mechanism   | Task Scheduler task | Direct file replacement             |
+| Admin privileges   | Required            | **Not required**                    |
+| Logs               | Service logs        | `logs/launcher.log`, `logs/api.log` |
 
 ### 3. File Locations
 
-| Item | Location |
-|------|----------|
-| Launcher | `C:\Works\POS\NexusProd\NexusProd.exe` |
-| API | `C:\Works\POS\NexusProd\NexusProd.Api.exe` |
-| Config | `C:\Works\POS\NexusProd\db_config.json` |
-| Logs | `C:\Works\POS\NexusProd\logs\` |
+| Item         | Location                                   |
+| ------------ | ------------------------------------------ |
+| Launcher     | `C:\Works\POS\NexusProd\NexusProd.exe`     |
+| API          | `C:\Works\POS\NexusProd\NexusProd.Api.exe` |
+| Config       | `C:\Works\POS\NexusProd\db_config.json`    |
+| Logs         | `C:\Works\POS\NexusProd\logs\`             |
 | Launcher Log | `C:\Works\POS\NexusProd\logs\launcher.log` |
-| API Log | `C:\Works\POS\NexusProd\logs\api.log` |
+| API Log      | `C:\Works\POS\NexusProd\logs\api.log`      |
 
 ### 4. Common Issues
 
-| Symptom | Solution |
-| :--- | :--- |
-| Processes not running | Start with: `Start-Process "C:\Works\POS\NexusProd\NexusProd.exe"` |
-| Port 8443 already in use | Find process: `Get-NetTCPConnection -LocalPort 8443` |
-| API health fails | Check MySQL connection, firewall, permissions |
-| SPA not loading | Verify wwwroot directory exists and has files |
-| Launcher keeps crashing | Check `logs/launcher.log` for errors; delete `logs/` to reset crash counter |
-| API keeps restarting | Check `logs/api.log` for errors |
+| Symptom                  | Solution                                                                    |
+| :----------------------- | :-------------------------------------------------------------------------- |
+| Processes not running    | Start with: `Start-Process "C:\Works\POS\NexusProd\NexusProd.exe"`          |
+| Port 8443 already in use | Find process: `Get-NetTCPConnection -LocalPort 8443`                        |
+| API health fails         | Check MySQL connection, firewall, permissions                               |
+| SPA not loading          | Verify wwwroot directory exists and has files                               |
+| Launcher keeps crashing  | Check `logs/launcher.log` for errors; delete `logs/` to reset crash counter |
+| API keeps restarting     | Check `logs/api.log` for errors                                             |
 
 ### 5. Process Controls
 
-| Action | Command |
-| :--- | :--- |
-| **Start** | `Start-Process "C:\Works\POS\NexusProd\NexusProd.exe"` |
-| **Stop launcher** | `Stop-Process -Name NexusProd -ErrorAction SilentlyContinue` |
-| **Stop API only** | `Stop-Process -Name NexusProd.Api -ErrorAction SilentlyContinue` |
-| **Restart** | `Stop-Process -Name NexusProd, NexusProd.Api -ErrorAction SilentlyContinue; Start-Process "C:\Works\POS\NexusProd\NexusProd.exe"` |
-| **Check status** | `Get-Process -Name NexusProd, NexusProd.Api -ErrorAction SilentlyContinue` |
+| Action            | Command                                                                                                                           |
+| :---------------- | :-------------------------------------------------------------------------------------------------------------------------------- |
+| **Start**         | `Start-Process "C:\Works\POS\NexusProd\NexusProd.exe"`                                                                            |
+| **Stop launcher** | `Stop-Process -Name NexusProd -ErrorAction SilentlyContinue`                                                                      |
+| **Stop API only** | `Stop-Process -Name NexusProd.Api -ErrorAction SilentlyContinue`                                                                  |
+| **Restart**       | `Stop-Process -Name NexusProd, NexusProd.Api -ErrorAction SilentlyContinue; Start-Process "C:\Works\POS\NexusProd\NexusProd.exe"` |
+| **Check status**  | `Get-Process -Name NexusProd, NexusProd.Api -ErrorAction SilentlyContinue`                                                        |
 
 ### 6. QA Testing Focus Areas
 

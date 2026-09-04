@@ -38,6 +38,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                   AND  CAST(od.dt AS DATE) = CASE stats
                                                 WHEN 'D' THEN CAST(DATE_ADD(NOW(), INTERVAL -1 DAY) AS DATE)
                                                 ELSE CAST(NOW() AS DATE)
+                                             END
                   AND  IFNULL(od.is_billed,  0) = 0
                   AND  IFNULL(od.is_exclude, 0) = 0
                   AND  od.qty                   > 0";
