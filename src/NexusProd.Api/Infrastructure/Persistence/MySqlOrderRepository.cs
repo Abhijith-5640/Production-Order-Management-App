@@ -483,46 +483,70 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                 // (4d) master insert + LAST_INSERT_ID. The two statements are
                 // batched by MySqlConnector, so this is one round trip.
+                // NOTE: INV31065BSD (transfer) does NOT have these columns:
+                // is_branch_sale, trnspt_mode, trnspt_doc_date, vehicle_no, driver_name
+                // so they are only included when inserting into INV31065 (sale).
+                string masterColumns = isTransfer
+                    ? @"tariff_id, bill_prfx, delim, bill_no, auth_no, sales_date,
+                        sales_ledger_id, pay_type_id, brnch_id, finyear_id, vou_typ_id,
+                        cashier_id, counter_settings_id, tot_grs_amt, tot_tax_amt,
+                        grand_total, is_ex_tax, descr, edit_stats, is_uploaded,
+                        is_primary, cgst_tot, sgst_tot, cess_tot, tax_type_id,
+                        tot_discount, round_off, is_changed_credit, counter_id"
+                    : @"tariff_id, bill_prfx, delim, bill_no, auth_no, sales_date,
+                        sales_ledger_id, pay_type_id, brnch_id, finyear_id, vou_typ_id,
+                        cashier_id, counter_settings_id, tot_grs_amt, tot_tax_amt,
+                        grand_total, is_ex_tax, descr, edit_stats, is_uploaded,
+                        is_primary, cgst_tot, sgst_tot, cess_tot, tax_type_id,
+                        is_branch_sale, tot_discount,
+                        trnspt_mode, trnspt_doc_date, vehicle_no, driver_name,
+                        round_off, is_changed_credit, counter_id";
+
+                string masterValues = isTransfer
+                    ? @"@tariffId, @billPrfx, @delim, @billNo, @authNo, @salesDate,
+                        @sellingLedgerId, @payTypeId, @sellingBrnchId, @finyearId, @vouTypId,
+                        @userId, @counterSettingsId, 0, 0, 0, @isExTax, '',
+                        0, 0, 1, 0, 0, 0, @taxTypeId, 0,
+                        0, 0, @counterId"
+                    : @"@tariffId, @billPrfx, @delim, @billNo, @authNo, @salesDate,
+                        @sellingLedgerId, @payTypeId, @sellingBrnchId, @finyearId, @vouTypId,
+                        @userId, @counterSettingsId, 0, 0, 0, @isExTax, '',
+                        0, 0, 1, 0, 0, 0, @taxTypeId, 1, 0,
+                        @trnsptMode, CAST(@salesDate AS DATE), @vehicleNo, @driverName,
+                        0, 0, @counterId";
+
+                var masterParams = new DynamicParameters();
+                masterParams.Add("tariffId", tariffId);
+                masterParams.Add("billPrfx", BillNoConfigs.BillNoPrfx);
+                masterParams.Add("delim", BillNoConfigs.Delim);
+                masterParams.Add("billNo", BillNo);
+                masterParams.Add("authNo", BillNoConfigs.AuthNo);
+                masterParams.Add("salesDate", v_curDate ?? DateTime.Now);
+                masterParams.Add("sellingLedgerId", PrdtTemplts.SellingLedgerId);
+                masterParams.Add("payTypeId", payTypeId);
+                masterParams.Add("sellingBrnchId", PrdtTemplts.SellingBrnchId);
+                masterParams.Add("finyearId", v_finyear);
+                masterParams.Add("vouTypId", 10);
+                masterParams.Add("userId", userId);
+                masterParams.Add("counterSettingsId", counterSet);
+                masterParams.Add("isExTax", isExclusive ? 1 : 0);
+                masterParams.Add("taxTypeId", (v_taxKey == "GST") ? 3 : 1);
+                masterParams.Add("counterId", userCounterId);
+
+                if (!isTransfer)
+                {
+                    masterParams.Add("trnsptMode", "1");
+                    masterParams.Add("vehicleNo", (string?)null);
+                    masterParams.Add("driverName", (string?)null);
+                }
+
                 var salesMastId = await conn.ExecuteScalarAsync<long>(new CommandDefinition(
                     $@"INSERT INTO {masterTbl}
-                        (tariff_id, bill_prfx, delim, bill_no, auth_no, sales_date,
-                         sales_ledger_id, pay_type_id, brnch_id, finyear_id, vou_typ_id,
-                         cashier_id, counter_settings_id, tot_grs_amt, tot_tax_amt,
-                         grand_total, is_ex_tax, descr, edit_stats, is_uploaded,
-                         is_primary, cgst_tot, sgst_tot, cess_tot, tax_type_id,
-                         is_branch_sale, tot_discount,
-                         trnspt_mode, trnspt_doc_date, vehicle_no, driver_name,
-                         round_off, is_changed_credit, counter_id)
+                        ({masterColumns})
                         VALUES
-                        (@tariffId, @billPrfx, @delim, @billNo, @authNo, @salesDate,
-                         @sellingLedgerId, @payTypeId, @sellingBrnchId, @finyearId, @vouTypId,
-                         @userId, @counterSettingsId, 0, 0, 0, @isExTax, '',
-                         0, 0, 1, 0, 0, 0, @taxTypeId, 1, 0,
-                         @trnsptMode, CAST(@salesDate AS DATE), @vehicleNo, @driverName,
-                         0, 0, @counterId);
+                        ({masterValues});
                         SELECT LAST_INSERT_ID();",
-                    new
-                    {
-                        tariffId,
-                        billPrfx = BillNoConfigs.BillNoPrfx,
-                        delim = BillNoConfigs.Delim,
-                        billNo = BillNo,
-                        authNo = BillNoConfigs.AuthNo,
-                        salesDate = v_curDate ?? DateTime.Now,
-                        sellingLedgerId = PrdtTemplts.SellingLedgerId,
-                        payTypeId,
-                        sellingBrnchId = PrdtTemplts.SellingBrnchId,
-                        finyearId = v_finyear,
-                        vouTypId = 10,
-                        userId,
-                        counterSettingsId = counterSet,
-                        isExTax = isExclusive ? 1 : 0,
-                        taxTypeId = (v_taxKey == "GST") ? 3 : 1,
-                        trnsptMode = "1",
-                        vehicleNo = (string?)null,
-                        driverName = (string?)null,
-                        counterId = userCounterId,
-                    },
+                    masterParams,
                     transaction: tx, cancellationToken: cancellationToken));
 
                 // (4e) detail bulk insert — one multi-row VALUES per group.
@@ -1156,6 +1180,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
     {
         int updated = 0, skipped = 0, carriedForward = 0, carrySkipped = 0;
         var mastersToRollup = new HashSet<(long SalesMastId, bool IsTransfer)>();
+        int decimals = 3;
 
         await using var conn = await _factory.OpenAsync(cancellationToken);
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
@@ -1197,7 +1222,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                 // Destructure to get master ID, transfer flag, rounding precision, and branch pair.
                 var (salesMastId, isTransferRaw, currencyDecml, purBrnchId, saleBrnchId) = bs.Value;
-                int decimals = currencyDecml ?? 3;
+                decimals = currencyDecml ?? 3;
                 bool isTransfer = isTransferRaw != 0;
                 long masterId = salesMastId;
                 mastersToRollup.Add((masterId, isTransfer));
@@ -1472,12 +1497,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                 await conn.ExecuteAsync(new CommandDefinition(
                     $@"UPDATE {masterTbl}
-                       SET tot_grs_amt  = (SELECT COALESCE(SUM(grs_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
-                           tot_tax_amt  = (SELECT COALESCE(SUM(tax_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
-                           tot_discount = (SELECT COALESCE(SUM(disc_amt), 0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
-                           grand_total  = (SELECT COALESCE(SUM(tot_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm)
+                       SET tot_grs_amt  = (SELECT ROUND(COALESCE(SUM(grs_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           tot_tax_amt  = (SELECT ROUND(COALESCE(SUM(tax_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           tot_discount = (SELECT ROUND(COALESCE(SUM(disc_amt), 0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           grand_total  = (SELECT ROUND(COALESCE(SUM(tot_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm)
                        WHERE sales_mast_id = @sm",
-                    new { sm },
+                    new { sm, decml = decimals },
                     transaction: tx, cancellationToken: cancellationToken));
             }
 
@@ -1507,6 +1532,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
         int updated = 0, skipped = 0, carriedForward = 0, carrySkipped = 0;
         var mastersToRollup = new HashSet<(long SalesMastId, bool IsTransfer)>();
+        int decimals = 3;
 
         await using var conn = await _factory.OpenAsync(cancellationToken);
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
@@ -1551,8 +1577,8 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     continue;
                 }
 
-                var (salesMastId, isTransferRaw, currencyDecml, purBrnchId, saleBrnchId) = bs.Value;
-                int decimals = currencyDecml ?? 3;
+                var (salesMastId, isTransferRaw, cDecml, purBrnchId, saleBrnchId) = bs.Value;
+                decimals = cDecml ?? 3;
                 bool isTransfer = isTransferRaw != 0;
                 long masterId = salesMastId;
 
@@ -1850,12 +1876,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
 
                 await conn.ExecuteAsync(new CommandDefinition(
                     $@"UPDATE {masterTbl}
-                       SET tot_grs_amt  = (SELECT COALESCE(SUM(grs_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
-                           tot_tax_amt  = (SELECT COALESCE(SUM(tax_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
-                           tot_discount = (SELECT COALESCE(SUM(disc_amt), 0) FROM {rollupSrc} WHERE sales_mast_id = @sm),
-                           grand_total  = (SELECT COALESCE(SUM(tot_amt),  0) FROM {rollupSrc} WHERE sales_mast_id = @sm)
+                       SET tot_grs_amt  = (SELECT ROUND(COALESCE(SUM(grs_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           tot_tax_amt  = (SELECT ROUND(COALESCE(SUM(tax_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           tot_discount = (SELECT ROUND(COALESCE(SUM(disc_amt), 0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
+                           grand_total  = (SELECT ROUND(COALESCE(SUM(tot_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm)
                        WHERE sales_mast_id = @sm",
-                    new { sm },
+                    new { sm, decml = decimals },
                     transaction: tx, cancellationToken: cancellationToken));
             }
 
