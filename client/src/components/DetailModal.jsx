@@ -6,7 +6,7 @@ const DetailModal = ({ isOpen, activeItem,currentSection, currentTrip, onClose, 
     if (!isOpen || !activeItem) return null;
 
     const filteredDist = activeItem.distribution || [];
-    const grandTotal = filteredDist.reduce((sum, dist) => sum + (dist.qty || 0), 0);
+    const grandTotal = Math.round(filteredDist.reduce((sum, dist) => sum + (dist.qty || 0), 0) * 1000) / 1000;
     
 
     return (

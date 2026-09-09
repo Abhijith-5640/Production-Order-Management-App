@@ -159,10 +159,11 @@ public sealed class MySqlOrderRepository : IOrderRepository
             cancellationToken: cancellationToken));
         var CurncyDecml = await conn.ExecuteScalarAsync<int>(new CommandDefinition(
             @"SELECT IFNULL(curncy_decml,3) AS CurncyDecml
-              FROM CTGE1165 
+              FROM CTGE1165
               WHERE brnch_id = @brnchId;",
             new { brnchId = brnchId },
             cancellationToken: cancellationToken));
+        var roundingSettings = await RoundingHelper.GetRoundingSettingsAsync(conn, brnchId, null, cancellationToken);
         var v_finyear = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
             @"SELECT finyear_id FROM ctge1160
               WHERE CAST(IFNULL(@curDate, NOW()) AS DATE) BETWEEN from_date AND to_date
@@ -532,6 +533,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 masterParams.Add("isExTax", isExclusive ? 1 : 0);
                 masterParams.Add("taxTypeId", (v_taxKey == "GST") ? 3 : 1);
                 masterParams.Add("counterId", userCounterId);
+                masterParams.Add("roundOff", 0m); // Initial value; will be updated by (4g) UPDATE
 
                 if (!isTransfer)
                 {
@@ -681,26 +683,37 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 var v_cessTot = v_taxKey == "GST" ? Math.Round(totals.CessTot, CurncyDecml) : 0m;
                 var v_totalTax = v_total - v_grsTot;
 
+                // Calculate round-off only for non-transfer (sale) bills
+                decimal v_roundOff = 0m;
+                decimal v_grandTotal = v_total;
+                if (!isTransfer)
+                {
+                    v_roundOff = RoundingHelper.CalculateRoundOff(v_total, roundingSettings);
+                    v_grandTotal = RoundingHelper.CalculateGrandTotal(v_total, v_roundOff);
+                }
+
                 // (4g) master totals UPDATE.
                 await conn.ExecuteAsync(new CommandDefinition(
                     $@"UPDATE {masterTbl}
-                        SET    grand_total  = @vTotal,
+                        SET    grand_total  = @vGrandTotal,
                                tot_tax_amt  = @vTotalTax,
                                cgst_tot     = @vCgstTot,
                                sgst_tot     = @vSgstTot,
                                cess_tot     = @vCessTot,
                                tot_grs_amt  = @vGrsTot,
-                               tax_type_id  = @taxTypeId
+                               tax_type_id  = @taxTypeId,
+                               round_off    = @roundOff
                         WHERE  sales_mast_id = @sm;",
                     new
                     {
-                        vTotal = v_total,
+                        vGrandTotal = v_grandTotal,
                         vTotalTax = v_totalTax,
                         vCgstTot = v_cgstTot,
                         vSgstTot = v_sgstTot,
                         vCessTot = v_cessTot,
                         vGrsTot = v_grsTot,
                         taxTypeId = (v_taxKey == "GST") ? 3 : 1,
+                        roundOff = v_roundOff,
                         sm = salesMastId,
                     },
                     transaction: tx, cancellationToken: cancellationToken));
@@ -1005,8 +1018,6 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                                         WHERE key_data = 'SECTION_CATEGORY_ID'
                                                         LIMIT 1
                                                     )
-            LEFT  JOIN INV31065BSPOSHis pos ON pos.stock_mast_id = s.stock_mast_id
-                                            AND pos.trip_no = bs.trip_no
             WHERE CAST(bsm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 1
               AND IFNULL(bs.is_finalized, 0) <> 1
@@ -1181,6 +1192,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
         int updated = 0, skipped = 0, carriedForward = 0, carrySkipped = 0;
         var mastersToRollup = new HashSet<(long SalesMastId, bool IsTransfer)>();
         int decimals = 3;
+        RoundingHelper.RoundingSettings? roundingSettings = null;
 
         await using var conn = await _factory.OpenAsync(cancellationToken);
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
@@ -1226,6 +1238,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 bool isTransfer = isTransferRaw != 0;
                 long masterId = salesMastId;
                 mastersToRollup.Add((masterId, isTransfer));
+
+                // Fetch rounding settings if not already fetched
+                if (roundingSettings == null && !isTransfer)
+                {
+                    roundingSettings = await RoundingHelper.GetRoundingSettingsAsync(conn, saleBrnchId, tx, cancellationToken);
+                }
 
                 var detailTbl = isTransfer ? "INV31066BSD" : "INV31066";
 
@@ -1495,14 +1513,36 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 var masterTbl = isT ? "INV31065BSD" : "INV31065";
                 var rollupSrc = isT ? "INV31066BSD" : "INV31066";
 
+                // Get current totals for round-off calculation
+                var totals = await conn.QueryFirstOrDefaultAsync<(decimal GrsTot, decimal TotAmt)>(
+                    new CommandDefinition(
+                        $@"SELECT COALESCE(SUM(grs_amt), 0) AS GrsTot,
+                                COALESCE(SUM(tot_amt), 0) AS TotAmt
+                          FROM {rollupSrc}
+                          WHERE sales_mast_id = @sm",
+                        new { sm },
+                        transaction: tx, cancellationToken: cancellationToken));
+
+                var roundedTotAmt = Math.Round(totals.TotAmt, decimals);
+
+                // Calculate round-off only for sale (non-transfer) bills
+                decimal roundOff = 0m;
+                decimal grandTotal = roundedTotAmt;
+                if (!isT && roundingSettings != null)
+                {
+                    roundOff = RoundingHelper.CalculateRoundOff(roundedTotAmt, roundingSettings);
+                    grandTotal = RoundingHelper.CalculateGrandTotal(roundedTotAmt, roundOff);
+                }
+
                 await conn.ExecuteAsync(new CommandDefinition(
                     $@"UPDATE {masterTbl}
                        SET tot_grs_amt  = (SELECT ROUND(COALESCE(SUM(grs_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
                            tot_tax_amt  = (SELECT ROUND(COALESCE(SUM(tax_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
                            tot_discount = (SELECT ROUND(COALESCE(SUM(disc_amt), 0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
-                           grand_total  = (SELECT ROUND(COALESCE(SUM(tot_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm)
+                           grand_total  = @grandTotal,
+                           round_off    = @roundOff
                        WHERE sales_mast_id = @sm",
-                    new { sm, decml = decimals },
+                    new { sm, decml = decimals, grandTotal, roundOff },
                     transaction: tx, cancellationToken: cancellationToken));
             }
 
@@ -1533,6 +1573,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
         int updated = 0, skipped = 0, carriedForward = 0, carrySkipped = 0;
         var mastersToRollup = new HashSet<(long SalesMastId, bool IsTransfer)>();
         int decimals = 3;
+        RoundingHelper.RoundingSettings? roundingSettings = null;
 
         await using var conn = await _factory.OpenAsync(cancellationToken);
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
@@ -1581,6 +1622,12 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 decimals = cDecml ?? 3;
                 bool isTransfer = isTransferRaw != 0;
                 long masterId = salesMastId;
+
+                // Fetch rounding settings if not already fetched
+                if (roundingSettings == null && !isTransfer)
+                {
+                    roundingSettings = await RoundingHelper.GetRoundingSettingsAsync(conn, saleBrnchId, tx, cancellationToken);
+                }
 
                 // If brnchId is provided, only process rows for that branch.
                 if (brnchId.HasValue && purBrnchId != brnchId.Value)
@@ -1874,14 +1921,36 @@ public sealed class MySqlOrderRepository : IOrderRepository
                 var masterTbl = isT ? "INV31065BSD" : "INV31065";
                 var rollupSrc = isT ? "INV31066BSD" : "INV31066";
 
+                // Get current totals for round-off calculation
+                var totals = await conn.QueryFirstOrDefaultAsync<(decimal GrsTot, decimal TotAmt)>(
+                    new CommandDefinition(
+                        $@"SELECT COALESCE(SUM(grs_amt), 0) AS GrsTot,
+                                COALESCE(SUM(tot_amt), 0) AS TotAmt
+                          FROM {rollupSrc}
+                          WHERE sales_mast_id = @sm",
+                        new { sm },
+                        transaction: tx, cancellationToken: cancellationToken));
+
+                var roundedTotAmt = Math.Round(totals.TotAmt, decimals);
+
+                // Calculate round-off only for sale (non-transfer) bills
+                decimal roundOff = 0m;
+                decimal grandTotal = roundedTotAmt;
+                if (!isT && roundingSettings != null)
+                {
+                    roundOff = RoundingHelper.CalculateRoundOff(roundedTotAmt, roundingSettings);
+                    grandTotal = RoundingHelper.CalculateGrandTotal(roundedTotAmt, roundOff);
+                }
+
                 await conn.ExecuteAsync(new CommandDefinition(
                     $@"UPDATE {masterTbl}
                        SET tot_grs_amt  = (SELECT ROUND(COALESCE(SUM(grs_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
                            tot_tax_amt  = (SELECT ROUND(COALESCE(SUM(tax_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
                            tot_discount = (SELECT ROUND(COALESCE(SUM(disc_amt), 0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm),
-                           grand_total  = (SELECT ROUND(COALESCE(SUM(tot_amt),  0), @decml) FROM {rollupSrc} WHERE sales_mast_id = @sm)
+                           grand_total  = @grandTotal,
+                           round_off    = @roundOff
                        WHERE sales_mast_id = @sm",
-                    new { sm, decml = decimals },
+                    new { sm, decml = decimals, grandTotal, roundOff },
                     transaction: tx, cancellationToken: cancellationToken));
             }
 
@@ -2221,8 +2290,6 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                                         WHERE key_data = 'SECTION_CATEGORY_ID'
                                                         LIMIT 1
                                                     )
-            LEFT  JOIN INV31065BSPOSHis pos ON pos.stock_mast_id = s.stock_mast_id
-                                            AND pos.trip_no = bs.trip_no
             WHERE CAST(bsm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 1
               AND IFNULL(bs.is_finalized, 0) <> 1
@@ -2269,8 +2336,6 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                                         WHERE key_data = 'SECTION_CATEGORY_ID'
                                                         LIMIT 1
                                                     )
-            LEFT JOIN INV31065BSPOSHis pos ON pos.stock_mast_id = s.stock_mast_id
-                                           AND pos.trip_no = bs.trip_no
             WHERE CAST(sm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 0
               AND IFNULL(bs.is_finalized, 0) <> 1
@@ -2364,6 +2429,117 @@ public sealed class MySqlOrderRepository : IOrderRepository
         {
             _logger.LogError(ex, "GetOrdersForUncategorizedAsync failed for tripId {TripId}", tripId);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Helper class for round-off calculations based on INV21040 settings.
+    /// </summary>
+    private static class RoundingHelper
+    {
+        public sealed record RoundingSettings(decimal Component, int Mode, bool IsNeeded);
+
+        /// <summary>
+        /// Fetches rounding settings for a branch from INV21040.
+        /// key_data values: ROUNDING_MODE, IS_ROUND_OFF_NEEDED, ROUNDING_COMPONENT
+        /// </summary>
+        public static async Task<RoundingSettings> GetRoundingSettingsAsync(
+            MySqlConnection conn, int saleBrnchId, MySqlTransaction? tx, CancellationToken cancellationToken)
+        {
+            var rows = await conn.QueryAsync<dynamic>(new CommandDefinition(
+                @"SELECT key_data, val_data
+                  FROM INV21040
+                  WHERE branch_id = @saleBrnchId
+                    AND key_data IN ('ROUNDING_MODE', 'IS_ROUND_OFF_NEEDED', 'ROUNDING_COMPONENT')",
+                new { saleBrnchId }, transaction: tx, cancellationToken: cancellationToken));
+
+            decimal component = 1.0m;
+            int mode = 0;
+            bool isNeeded = false;
+
+            foreach (var row in rows)
+            {
+                var keyData = (string)row.key_data;
+                var valData = row.val_data?.ToString() ?? "";
+
+                switch (keyData)
+                {
+                    case "ROUNDING_COMPONENT":
+                        decimal.TryParse(valData, out component);
+                        break;
+                    case "ROUNDING_MODE":
+                        int.TryParse(valData, out mode);
+                        break;
+                    case "IS_ROUND_OFF_NEEDED":
+                        isNeeded = valData == "1" || valData == "true" || valData == "True";
+                        break;
+                }
+            }
+
+            return new RoundingSettings(component, mode, isNeeded);
+        }
+
+        /// <summary>
+        /// Rounds amount based on mode:
+        /// 0 = No Change, 1 = Forward (Up), 2 = Backward (Down)
+        /// </summary>
+        public static decimal UltimateRoundingFunction(decimal amountToRound, decimal component, int mode)
+        {
+            if (component <= 0) return amountToRound;
+
+            decimal integerPart = Math.Truncate(amountToRound);
+            decimal decimalPart = amountToRound - integerPart;
+
+            // No rounding needed if no decimal part
+            if (decimalPart == 0) return amountToRound;
+
+            switch (mode)
+            {
+                case 0: // No Change
+                    return amountToRound;
+
+                case 1: // Forward (Round Up)
+                    return Math.Ceiling(amountToRound);
+
+                case 2: // Backward (Round Down)
+                    return Math.Floor(amountToRound);
+            }
+
+            // Default: standard rounding to component
+            if (component == 0.5m)
+                return decimalPart < 0.5m ? Math.Floor(amountToRound) : Math.Ceiling(amountToRound);
+
+            decimal multiplier = decimalPart / component;
+            decimal roundedMultiplier = Math.Round(multiplier, 0, MidpointRounding.AwayFromZero);
+            decimal roundedDecimal = roundedMultiplier * component;
+
+            if (roundedDecimal >= 1m)
+            {
+                integerPart += 1m;
+                roundedDecimal = 0m;
+            }
+
+            return integerPart + roundedDecimal;
+        }
+
+        /// <summary>
+        /// Calculates the round-off amount for a given total.
+        /// </summary>
+        public static decimal CalculateRoundOff(decimal totBilAmt, RoundingSettings settings)
+        {
+            if (!settings.IsNeeded) return 0;
+            if (totBilAmt == 0) return 0;
+
+            decimal roundedVal = UltimateRoundingFunction(totBilAmt, settings.Component, settings.Mode);
+            return Math.Round(roundedVal - totBilAmt, 3);
+        }
+
+        /// <summary>
+        /// Calculates grand total including round-off.
+        /// </summary>
+        public static decimal CalculateGrandTotal(decimal totBilAmt, decimal roundOff)
+        {
+            return Math.Round(totBilAmt + roundOff, 3);
         }
     }
 }
