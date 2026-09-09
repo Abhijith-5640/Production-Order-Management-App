@@ -774,6 +774,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                 AND IFNULL(bs.is_for_transfer, 0) = 0
                                 AND s.itm_mast_id = pc.itm_mast_id
                                 AND CAST(sm.sales_date AS DATE) = CURDATE()
+                                AND IFNULL(bs.is_finalized,0) <> 1
                           )
                           OR EXISTS (
                               SELECT 1 FROM INV31065BS bs
@@ -784,6 +785,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                 AND IFNULL(bs.is_for_transfer, 0) = 1
                                 AND s.itm_mast_id = pc.itm_mast_id
                                 AND CAST(sm.sales_date AS DATE) = CURDATE()
+                                AND IFNULL(bs.is_finalized,0) <> 1
                           )
                         )
                       ORDER BY cv.prdt_cat_val_nam ASC;",
@@ -824,6 +826,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         )
                     WHERE CAST(bsm.sales_date AS DATE) = CURDATE()
                         AND IFNULL(bs.is_for_transfer, 0) = 1
+                        AND IFNULL(bs.is_finalized, 0) <> 1
                         AND pc.prdt_cat_val_id IS NULL
                 )
                 OR EXISTS(
@@ -841,6 +844,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                         )
                     WHERE CAST(sm.sales_date AS DATE) = CURDATE()
                         AND IFNULL(bs.is_for_transfer, 0) = 0
+                        AND IFNULL(bs.is_finalized, 0) <> 1
                         AND pc.prdt_cat_val_id IS NULL
                 ) AS HasUncategorized";
 
@@ -879,6 +883,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                       JOIN INV21013 pc ON pc.itm_mast_id = s.itm_mast_id
                       WHERE bs.trip_no = t.id
                         AND IFNULL(bs.is_for_transfer, 0) = 0
+                        AND IFNULL(bs.is_finalized, 0) <> 1
                         AND pc.prdt_cat_val_id = @SecId
                         AND pc.prdt_cat_id = (SELECT CAST(val_data AS SIGNED) FROM INV21040 WHERE key_data = 'SECTION_CATEGORY_ID' LIMIT 1)
                         AND CAST(sm.sales_date AS DATE) = CURDATE()
@@ -892,6 +897,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                       JOIN INV21013 pc ON pc.itm_mast_id = s.itm_mast_id
                       WHERE bs.trip_no = t.id
                         AND IFNULL(bs.is_for_transfer, 0) = 1
+                        AND IFNULL(bs.is_finalized, 0) <> 1
                         AND pc.prdt_cat_val_id = @SecId
                         AND pc.prdt_cat_id = (SELECT CAST(val_data AS SIGNED) FROM INV21040 WHERE key_data = 'SECTION_CATEGORY_ID' LIMIT 1)
                         AND CAST(sm.sales_date AS DATE) = CURDATE()
@@ -979,6 +985,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                             AND pos.trip_no = bs.trip_no
             WHERE CAST(bsm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 1
+              AND IFNULL(bs.is_finalized, 0) <> 1
               AND bs.trip_no         = @tripId
               AND pc.prdt_cat_val_id = @sectionId
 
@@ -1024,6 +1031,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                                     )
             WHERE CAST(sm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 0
+              AND IFNULL(bs.is_finalized, 0) <> 1
               AND bs.trip_no         = @tripId
               AND pc.prdt_cat_val_id = @sectionId
         ) u
@@ -1063,7 +1071,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                       JOIN   inv31065bs bs ON bs.trip_no = t.id
                       WHERE  bs.pur_template_id IN @purTmpltIds
                         AND  bs.pur_brnch_id    IN @purBrnchIds
-                        AND  IFNULL(bs.is_finalized, 0) = 0
+                        AND  IFNULL(bs.is_finalized, 0) <> 1
                         AND  CAST(bs.createdDt AS DATE) = CAST(NOW() AS DATE)
                       ORDER  BY t.trip_seq ASC",
                     new
@@ -2083,6 +2091,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                           )
                       WHERE bs.trip_no = t.id
                         AND IFNULL(bs.is_for_transfer, 0) = 1
+                        AND IFNULL(bs.is_finalized, 0) <> 1
                         AND pc.prdt_cat_val_id IS NULL
                         AND CAST(bsm.sales_date AS DATE) = CURDATE()
                   )
@@ -2102,6 +2111,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                           )
                       WHERE bs.trip_no = t.id
                         AND IFNULL(bs.is_for_transfer, 0) = 0
+                        AND IFNULL(bs.is_finalized, 0) <> 1
                         AND pc.prdt_cat_val_id IS NULL
                         AND CAST(sm.sales_date AS DATE) = CURDATE()
                   )
@@ -2189,6 +2199,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                             AND pos.trip_no = bs.trip_no
             WHERE CAST(bsm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 1
+              AND IFNULL(bs.is_finalized, 0) <> 1
               AND bs.trip_no         = @tripId
               AND pc.prdt_cat_val_id IS NULL
 
@@ -2236,6 +2247,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                                            AND pos.trip_no = bs.trip_no
             WHERE CAST(sm.sales_date AS DATE) = CAST(NOW() AS DATE)
               AND IFNULL(bs.is_for_transfer, 0) = 0
+              AND IFNULL(bs.is_finalized, 0) <> 1
               AND bs.trip_no = @tripId
               AND pc.prdt_cat_val_id IS NULL
         ) u
@@ -2259,7 +2271,7 @@ public sealed class MySqlOrderRepository : IOrderRepository
                     @"SELECT DISTINCT t.id, t.trip, t.trip_seq, bs.pur_template_id, bs.pur_brnch_id
                       FROM Trip t JOIN inv31065bs bs ON bs.trip_no = t.id
                       WHERE bs.pur_template_id IN @purTmpltIds AND bs.pur_brnch_id IN @purBrnchIds
-                        AND IFNULL(bs.is_finalized, 0) = 0
+                        AND IFNULL(bs.is_finalized, 0) <> 1
                         AND CAST(bs.createdDt AS DATE) = CAST(NOW() AS DATE)
                       ORDER BY t.trip_seq ASC",
                     new
