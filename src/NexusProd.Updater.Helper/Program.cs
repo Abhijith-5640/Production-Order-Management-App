@@ -123,14 +123,13 @@ var watch = System.Diagnostics.Stopwatch.StartNew();
 // ── Main launcher loop ───────────────────────────────────────────────────
 while (true)
 {
-    // ── Check for pending update (NexusProd.exe.new) on every loop iteration ───
-    var newExePath = Path.Combine(installDir, "NexusProd.exe.new");
-    if (File.Exists(newExePath))
+    // ── Helper: apply a .new file update ──────────────────────────────────────
+    bool ApplyNewUpdate(string newExePath)
     {
-        Log("Found NexusProd.exe.new — applying update...");
+        if (!File.Exists(newExePath)) return false;
 
-        var currentExe = Path.Combine(installDir, "NexusProd.exe");
-        var backupExe = Path.Combine(installDir, "NexusProd.exe.bak");
+        var currentExe = newExePath.Substring(0, newExePath.Length - 4); // strip ".new"
+        var backupExe = currentExe + ".bak";
 
         try
         {
@@ -143,27 +142,45 @@ while (true)
 
             // Move new to current
             File.Move(newExePath, currentExe);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log($"ERROR applying .new update for {Path.GetFileName(currentExe)}: {ex.Message}. Restoring backup.");
+            try
+            {
+                if (File.Exists(backupExe)) File.Move(backupExe, currentExe, overwrite: true);
+            }
+            catch { }
+            return false;
+        }
+    }
 
-            // Start the new version and exit
+    // ── Check for pending launcher update (NexusProd.exe.new) ─────────────────
+    var newLauncherPath = Path.Combine(installDir, "NexusProd.exe.new");
+    if (File.Exists(newLauncherPath))
+    {
+        Log("Found NexusProd.exe.new — applying launcher update...");
+        if (ApplyNewUpdate(newLauncherPath))
+        {
             Log("Starting updated NexusProd.exe...");
             var startInfo = new ProcessStartInfo
             {
-                FileName = currentExe,
+                FileName = Path.Combine(installDir, "NexusProd.exe"),
                 UseShellExecute = true
             };
             Process.Start(startInfo);
             Log("Update complete. Exiting old launcher.");
             Environment.Exit(0);
         }
-        catch (Exception ex)
-        {
-            Log($"ERROR applying .new update: {ex.Message}. Restoring backup.");
-            try
-            {
-                if (File.Exists(backupExe)) File.Move(backupExe, currentExe, overwrite: true);
-            }
-            catch { }
-        }
+    }
+
+    // ── Check for pending API update (NexusProd.Api.exe.new) ─────────────────
+    var newApiPath = Path.Combine(installDir, "NexusProd.Api.exe.new");
+    if (File.Exists(newApiPath))
+    {
+        Log("Found NexusProd.Api.exe.new — applying API update...");
+        ApplyNewUpdate(newApiPath);
     }
 
     // ── Check for update-pending.zip on every loop iteration ───────────────────
@@ -191,8 +208,10 @@ while (true)
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
 
-                    // If this is NexusProd.Api.exe, write as .new to avoid locked-file issues
-                    if (string.Equals(relativePath, "NexusProd.Api.exe", StringComparison.OrdinalIgnoreCase))
+                    // If this is the launcher (NexusProd.exe) or API (NexusProd.Api.exe),
+                    // write as .new to avoid locked-file issues
+                    if (string.Equals(relativePath, "NexusProd.Api.exe", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(relativePath, "NexusProd.exe", StringComparison.OrdinalIgnoreCase))
                     {
                         File.Copy(file, destPath + ".new", overwrite: true);
                         Log($"Copied NexusProd.Api.exe as .new");
