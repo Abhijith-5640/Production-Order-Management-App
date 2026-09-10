@@ -82,8 +82,9 @@ const AdjustmentModal = ({
         const updates = purSaleEntries.map(entry => {
             const config = localAdjustments[entry.purSaleId] || {};
             const isQtyReduction = mode === 'quantity_reduction';
+            const unitDecml = item.unitDecml ?? 3;
             const reducedQty = isQtyReduction
-                ? Number(entry.originalQty ?? entry.qty) - Number(entry.qty)
+                ? parseFloat((Number(entry.originalQty ?? entry.qty) - Number(entry.qty)).toFixed(unitDecml))
                 : Number(entry.qty);
             return {
                 purSaleId: entry.purSaleId,
@@ -182,8 +183,9 @@ const AdjustmentModal = ({
                         const candidates = (p.availableTrips ?? []).filter(t => t.id !== p.trip);
 
                         // For QR mode, show the diff (originalQty - qty) in the qty badge
+                        const unitDecml = item.unitDecml ?? 3;
                         const displayQty = mode === 'quantity_reduction'
-                            ? Math.max(0, Number(p.originalQty ?? p.qty) - Number(p.qty))
+                            ? parseFloat(Math.max(0, Number(p.originalQty ?? p.qty) - Number(p.qty)).toFixed(unitDecml))
                             : p.qty;
                         return (
                             <div
@@ -205,7 +207,7 @@ const AdjustmentModal = ({
                                     </div>
                                     <div className="text-right">
                                         <span className="text-2xl font-black text-indigo-600">
-                                            {displayQty}
+                                            {displayQty.toFixed(unitDecml)}
                                         </span>
                                         <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">
                                             {item.unit}

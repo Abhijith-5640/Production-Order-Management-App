@@ -6,7 +6,8 @@ const DetailModal = ({ isOpen, activeItem,currentSection, currentTrip, onClose, 
     if (!isOpen || !activeItem) return null;
 
     const filteredDist = activeItem.distribution || [];
-    const grandTotal = Math.round(filteredDist.reduce((sum, dist) => sum + (dist.qty || 0), 0) * 1000) / 1000;
+    const unitDecml = activeItem.unitDecml ?? 3;
+    const grandTotal = parseFloat(filteredDist.reduce((sum, dist) => sum + (dist.qty || 0), 0).toFixed(unitDecml));
     
 
     return (
@@ -80,7 +81,7 @@ const DetailModal = ({ isOpen, activeItem,currentSection, currentTrip, onClose, 
                 <div className="p-6 bg-white border-t border-slate-300 sticky bottom-0">
                     <div className="flex justify-between items-center mb-4">
                         <p className="font-bold text-slate-400 uppercase text-[10px]">Consolidated Qty</p>
-                        <p className="text-3xl font-bold text-indigo-600">{grandTotal}</p>
+                        <p className="text-3xl font-bold text-indigo-600">{grandTotal.toFixed(unitDecml)}</p>
                     </div>
                     <button
                         onClick={onSave}
