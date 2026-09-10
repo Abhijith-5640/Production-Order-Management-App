@@ -1,6 +1,6 @@
 {
   "name": "production-order-management-app",
-  "version": "1.0.0",
+  "version": "1.0.6",
   "description": "Full stack production order management app",
   "scripts": {
     "install:client": "npm install --prefix client",
