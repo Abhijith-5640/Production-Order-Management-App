@@ -1,23 +1,22 @@
-# Nexus Prod — API Documentation
+# NexusProd — API Documentation
 
-This document describes the REST endpoints exposed by the **Nexus Prod** server (ASP.NET Core 8, minimal API). It documents the request/response shape for every public route group.
+This document describes the REST endpoints exposed by the **Nexus Prod** server (ASP.NET Core 8, minimal API).
 
 ## Conventions
 
-- **Base URL**: `http://localhost:5099/api` during development. In production the host is whatever the Windows service is bound to — see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
-- **Auth**: most `/api/orders/*` endpoints require a JWT bearer token in the `Authorization: Bearer <accessToken>` header. The token is short-lived (15 min) and is re-issued silently via `POST /api/auth/refresh` using the HttpOnly refresh cookie set at login.
-- **Errors**: failures return `application/problem+json` with a `ProblemDetails` body. Domain failures from use cases return HTTP 400 with a `{ "message": "...", "code": "InvalidInput" }` body. Unhandled exceptions become HTTP 500.
-- **Content type**: all request bodies are `application/json` unless noted.
+- **Base URL**: `http://localhost:5099/api` during development
+- **Auth**: Most endpoints require a JWT bearer token: `Authorization: Bearer <accessToken>`
+- **Token Refresh**: Short-lived access token (15 min), silently refreshed via HttpOnly cookie
+- **Errors**: Domain failures return HTTP 400 with `{ "message": "...", "code": "..." }`. Unhandled exceptions return HTTP 500.
+- **Content Type**: All request bodies are `application/json`
 
 ---
 
 ## Auth — `/api/auth`
 
-JWT issuance, refresh, logout, and "who am I".
-
 ### `POST /api/auth/login`
 
-Validates credentials against `user_master` and returns a fresh access token. Sets the refresh token in an HttpOnly cookie (`Secure` flag is set when the request is HTTPS, off on plain HTTP for local-network use).
+Authenticates user and returns access token + refresh cookie.
 
 **Request**
 ```json
@@ -28,7 +27,7 @@ Validates credentials against `user_master` and returns a fresh access token. Se
 ```json
 {
   "accessToken": "eyJhbGciOi...",
-  "accessExpiresAt": "2026-06-24T10:30:00+00:00",
+  "accessExpiresAt": "2026-09-10T10:30:00+00:00",
   "user": "admin",
   "userId": 1,
   "userBrnchId": 1,
@@ -41,40 +40,44 @@ Validates credentials against `user_master` and returns a fresh access token. Se
 { "message": "Invalid username or password", "code": "InvalidInput" }
 ```
 
-**Side effect**: response sets a cookie named `nexusprod_rt` (name configurable via `JwtSettings:CookieName`).
+---
 
 ### `POST /api/auth/refresh`
 
-Reads the refresh cookie, validates the JWT, rotates its JTI server-side, and returns a new short-lived access token. Does **not** rotate the cookie itself — clients in the silent-refresh scenario only need a new access token.
+Reads refresh cookie, validates JWT, returns new access token.
 
-**Request**: no body, requires the `nexusprod_rt` cookie.
+**Request**: No body (requires `nexusprod_rt` cookie)
 
 **Response 200**
 ```json
 {
   "accessToken": "eyJhbGciOi...",
-  "accessExpiresAt": "2026-06-24T10:45:00+00:00"
+  "accessExpiresAt": "2026-09-10T10:45:00+00:00"
 }
 ```
 
-**Response 401** — missing/expired/revoked cookie.
+**Response 401** — missing/expired/revoked cookie
+
+---
 
 ### `POST /api/auth/logout`
 
-Revokes the current access token's JTI (so it cannot be reused even if not yet expired) and revokes the refresh token's JTI. Clears the refresh cookie.
+Revokes tokens and clears refresh cookie.
 
-**Auth**: required.
+**Auth**: Required
 
 **Response 200**
 ```json
 { "success": true }
 ```
 
+---
+
 ### `GET /api/auth/me`
 
-Returns the current user from the access-token claims.
+Returns current user info from access token.
 
-**Auth**: required.
+**Auth**: Required
 
 **Response 200**
 ```json
@@ -85,11 +88,13 @@ Returns the current user from the access-token claims.
 
 ## Lookups — `/api/sections`, `/api/trips`, `/api/server-info`, `/api/health`
 
-Anonymous endpoints used by the Login page before the user authenticates.
+Anonymous endpoints (no auth required).
+
+---
 
 ### `GET /api/sections`
 
-Returns the active section list along with the parent category ID (the original Express app gates both fields, the .NET port keeps them so the frontend can show the breadcrumb without an extra round trip).
+Returns active section list with parent category ID.
 
 **Response 200**
 ```json
@@ -102,12 +107,16 @@ Returns the active section list along with the parent category ID (the original 
 }
 ```
 
+---
+
 ### `GET /api/trips?section={sectionId}`
 
-Returns the trips that have an active invoice for any item in the given section.
+Returns trips with active invoices for the given section.
 
-**Query parameters**
-- `section` — section ID (integer), e.g. `?section=1`.
+**Query Parameters**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `section` | int | Section ID |
 
 **Response 200**
 ```json
@@ -119,31 +128,35 @@ Returns the trips that have an active invoice for any item in the given section.
 }
 ```
 
+---
+
 ### `GET /api/server-info`
 
-Returns the running server's version, current time, uptime, LAN addresses it is bound to, and the listening port. Used by the "About / connection" panel and by the updater.
+Returns server version, time, uptime, LAN addresses, and port.
 
 **Response 200**
 ```json
 {
-  "version": "1.0.0",
-  "serverTime": "2026-06-24T09:00:00+00:00",
+  "version": "1.0.6",
+  "serverTime": "2026-09-10T09:00:00+00:00",
   "uptimeSeconds": 3600.5,
   "lanAddresses": ["192.168.1.20", "10.0.0.15"],
   "port": 5099
 }
 ```
 
+---
+
 ### `GET /api/health`
 
-Liveness probe. Returns a static payload.
+Liveness probe.
 
 **Response 200**
 ```json
 {
   "status": "ok",
-  "version": "1.0.0",
-  "serverTime": "2026-06-24T09:00:00+00:00",
+  "version": "1.0.6",
+  "serverTime": "2026-09-10T09:00:00+00:00",
   "uptimeSeconds": 0
 }
 ```
@@ -152,15 +165,19 @@ Liveness probe. Returns a static payload.
 
 ## Orders — `/api/orders`
 
-All routes in this group require `AuthenticatedUser` policy (valid JWT).
+All routes in this group require JWT authentication.
 
-### `GET /api/orders/{sectionId}/{tripId}`
+---
 
-Loads the order list for the given section + trip, with per-branch distribution. Items come from `inv31065bs` (bill summary) joined to `inv31066` / `inv31066bsd` (detail rows), with `pur_sale_id` exposed on each distribution row so the client can address it on update/exclude.
+### `GET /api/orders?section={sectionId}&trip={tripId}`
 
-**URL parameters**
-- `sectionId` — section ID.
-- `tripId` — trip ID.
+Loads order list for the given section + trip, with per-branch distribution.
+
+**Query Parameters**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `section` | int | Section ID |
+| `trip` | int | Trip ID |
 
 **Response 200**
 ```json
@@ -172,6 +189,7 @@ Loads the order list for the given section + trip, with per-branch distribution.
       "totalQty": 75,
       "name": "Artisan Sourdough",
       "unit": "Loaf",
+      "unitDecml": 3,
       "isCompleted": false,
       "distribution": [
         {
@@ -180,6 +198,8 @@ Loads the order list for the given section + trip, with per-branch distribution.
           "brnchId": 1,
           "trip": 1,
           "qty": 45,
+          "originalQty": 45,
+          "billNoStr": "INV-001",
           "availableTrips": [
             { "id": 1, "trip": "06:00 AM Trip" },
             { "id": 2, "trip": "09:00 AM Trip" }
@@ -191,32 +211,92 @@ Loads the order list for the given section + trip, with per-branch distribution.
 }
 ```
 
-### `GET /api/orders/check-pending`
+**Distribution Fields**
+| Field | Type | Description |
+|-------|------|-------------|
+| `purSaleId` | int | Unique identifier for this distribution row |
+| `branch` | string | Branch/store name |
+| `brnchId` | int | Branch ID |
+| `trip` | int | Current trip ID |
+| `qty` | decimal | Current quantity |
+| `originalQty` | decimal | Original quantity before edits |
+| `billNoStr` | string | Invoice reference |
+| `availableTrips` | array | Trips available for routing |
 
-Returns whether any rows in `order_distribution` are still pending invoice generation.
+---
+
+### `GET /api/orders/check-pending?brnchId={branchId}`
+
+Checks if any rows are pending invoice generation.
+
+**Query Parameters**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `brnchId` | int? | Optional branch filter |
 
 **Response 200**
 ```json
 { "pendingExist": true }
 ```
 
-### `POST /api/orders/generate-invoices`
+---
 
-Scans `order_distribution` for pending rows, groups them by `(branch_id, trip_id)`, materializes `sales_master` / `sales_details` (or `sales_transfer_master` / `sales_transfer_details` for `is_for_transfer = 1`), and flips `inv_gen = 1`. Runs in a single transaction; returns the count of invoices written.
+### `GET /api/orders/tariff-violations?brnchId={branchId}`
+
+Returns items that violate purchasing tariff rules.
+
+**Query Parameters**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `brnchId` | int? | Optional branch filter |
+
+**Response 200**
+```json
+{
+  "hasViolations": true,
+  "totalItems": 3,
+  "totalBranches": 2,
+  "branches": [
+    {
+      "branchName": "Main Warehouse",
+      "branchId": 1,
+      "items": [
+        { "itemId": 101, "itemCode": "ITM001", "itemName": "Item Name", "unit": "Pcs", "qty": 50 }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### `POST /api/orders/generate`
+
+Generates invoices from pending order distribution rows.
 
 **Request**
 ```json
-{ "userId": 1, "brnchId": 1, "userCounterId": 1 }
+{
+  "userId": 1,
+  "brnchId": 1,
+  "userCounterId": 1
+}
 ```
 
 **Response 200**
 ```json
-{ "success": true, "message": "21 invoices generated", "invoiceCount": 21 }
+{
+  "success": true,
+  "message": "21 invoices generated",
+  "invoiceCount": 21
+}
 ```
+
+---
 
 ### `POST /api/orders/update`
 
-Updates quantities for a single item across one or more branches in the current trip. Marks the affected detail rows complete. Recalculates `sales_master.total_value`. `OriginalQty` is the qty the client shows as the baseline; the actual UPDATE writes the `Qty` (nullable — `null` means "leave unchanged").
+Updates quantities for a single item across branches. Marks rows complete.
 
 **Request**
 ```json
@@ -224,19 +304,37 @@ Updates quantities for a single item across one or more branches in the current 
   "itemId": 1,
   "trip": 1,
   "distribution": [
-    { "purSaleId": 9001, "stockMastId": 1001, "originalQty": 45, "branch": "Main Warehouse", "qty": 50 }
-  ]
+    {
+      "purSaleId": 9001,
+      "stockMastId": 1001,
+      "originalQty": 45,
+      "branch": "Main Warehouse",
+      "qty": 50
+    }
+  ],
+  "usrId": 1
 }
 ```
+
+**Distribution Fields**
+| Field | Type | Description |
+|-------|------|-------------|
+| `purSaleId` | int | Distribution row ID |
+| `stockMastId` | int | Item ID |
+| `originalQty` | decimal | Baseline quantity |
+| `branch` | string | Branch name |
+| `qty` | decimal? | New quantity (null = unchanged) |
 
 **Response 200**
 ```json
 { "success": true, "message": "Updated 1 row(s)" }
 ```
 
+---
+
 ### `POST /api/orders/exclude`
 
-Excludes an item from the current trip's invoice and (optionally) rolls the quantity over to the next trip. Each `Entries` row carries its own `targetTrip` so the client can roll some branches to trip N and others to trip N+1 in a single call. If a row's `targetTrip` is `null` the quantity is dropped entirely.
+Excludes item from current trip and optionally routes to next trip.
 
 **Request**
 ```json
@@ -248,11 +346,28 @@ Excludes an item from the current trip's invoice and (optionally) rolls the quan
   "brnchId": null,
   "entries": [
     { "purSaleId": 9001, "qty": 45, "targetTrip": 2 }
-  ]
+  ],
+  "usrId": 1
 }
 ```
 
-When `brnchId` is `null` the exclusion applies to every branch carrying `stockMastId` in the current trip; otherwise only that branch. Returns a free-form human message with row counts and skip reasons.
+**Request Fields**
+| Field | Type | Description |
+|-------|------|-------------|
+| `sectionId` | int | Section ID |
+| `itemId` | int | Item ID |
+| `currentTrip` | int | Current trip ID |
+| `stockMastId` | int | Stock master ID |
+| `brnchId` | int? | Specific branch (null = all branches) |
+| `entries` | array | Per-row exclusion entries |
+| `usrId` | int | User ID |
+
+**Entry Fields**
+| Field | Type | Description |
+|-------|------|-------------|
+| `purSaleId` | int | Distribution row ID |
+| `qty` | decimal | Quantity to exclude |
+| `targetTrip` | int? | Route to trip (null = discard) |
 
 **Response 200**
 ```json
@@ -263,11 +378,13 @@ When `brnchId` is `null` the exclusion applies to every branch carrying `stockMa
 
 ## Config — `/api/config`
 
-Anonymous, used by the first-run wizard before authentication exists.
+Anonymous endpoints for database configuration wizard.
+
+---
 
 ### `POST /api/config/save`
 
-Writes the connection credentials to `db_config.json` next to the running executable. The file is the authoritative source on next startup; the live `IConnectionFactory` picks the new values without a restart.
+Saves database credentials to `db_config.json`.
 
 **Request**
 ```json
@@ -286,16 +403,20 @@ Writes the connection credentials to `db_config.json` next to the running execut
 { "success": true, "message": "Configuration saved" }
 ```
 
+---
+
 ### `POST /api/config/test`
 
-Pings a target MySQL server with the given credentials without writing them to disk. Used by the wizard's "Test connection" button.
+Tests database connection without saving.
 
-**Request**: same as `/save` (no `useMockDb`).
+**Request**: Same as `/save` (without `useMockDb`)
+
 **Response 200**
 ```json
 { "success": true, "message": "Connected in 23ms" }
 ```
-**Response 500** on failure
+
+**Response 500** — connection failed
 ```json
 { "success": false, "message": "Unable to connect: connect ECONNREFUSED 127.0.0.1:3306" }
 ```
@@ -304,25 +425,29 @@ Pings a target MySQL server with the given credentials without writing them to d
 
 ## Updater — `/api/updater`
 
-Anonymous. The updater is a separate long-running background service that polls an external manifest URL.
+Anonymous. Background service for auto-updates.
+
+---
 
 ### `GET /api/updater/status`
 
-Returns the current phase (`Idle`, `Checking`, `Downloading`, `Ready`, `Error`, etc.) and the latest seen version.
+Returns current update phase and latest version.
 
 **Response 200**
 ```json
 {
   "phase": "Idle",
   "message": null,
-  "latestVersion": "1.1.0",
-  "lastChecked": "2026-06-24T08:00:00+00:00"
+  "latestVersion": "1.0.6",
+  "lastChecked": "2026-09-10T08:00:00+00:00"
 }
 ```
 
+---
+
 ### `POST /api/updater/check`
 
-Forces an immediate check. Returns `accepted: false` if a check is already in progress.
+Forces immediate update check.
 
 **Response 200**
 ```json
@@ -331,7 +456,7 @@ Forces an immediate check. Returns `accepted: false` if a check is already in pr
 
 ---
 
-## Error shapes
+## Error Shapes
 
 **Domain failure (HTTP 400)**
 ```json
@@ -350,6 +475,8 @@ Forces an immediate check. Returns `accepted: false` if a check is already in pr
 
 ---
 
-## Versioning
+## Version
 
-The base path is `/api` with no version segment. Breaking changes to the response shape are avoided; additive fields are not. The current `version` field on `/health` and `/server-info` is the assembly informational version (`1.0.0`).
+Current version: **1.0.6** (from `package.json` assembly version)
+
+The `/health` and `/server-info` endpoints return the current version.
